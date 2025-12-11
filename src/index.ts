@@ -5,15 +5,19 @@ import { DynamicRouter } from './router/dynamicRouter';
 import { ProxyService } from './services/proxyService';
 import { InMemoryRouteRepository } from './data/routeRepository';
 import { config } from './config/env';
+import { AuthzService } from './services/authzService';
 import type { Route } from './types';
 
 const app = new Hono();
 
 // Setup Dependencies (Dependency Injection could be better but keeping simple for now)
+// Setup Dependencies (Dependency Injection could be better but keeping simple for now)
 const serviceMap = {
   // In a real app, these would come from env or service discovery
-  'DOC_SERVICE': process.env.DOC_SERVICE_URL || 'http://localhost:3001',
+  'DOC_SERVICE': config.DOC_SERVICE_URL,
 };
+
+const authzService = new AuthzService(config.AUTHZ_SERVICE_URL);
 
 // Seed some initial routes for testing/dev
 const initialRoutes: Route[] = [
@@ -24,6 +28,7 @@ const initialRoutes: Route[] = [
     serviceKey: 'DOC_SERVICE',
     targetPath: '/documents',
     workspaceScoped: true,
+    actionKey: 'document:create'
   },
   {
     id: '2',
@@ -32,6 +37,7 @@ const initialRoutes: Route[] = [
     serviceKey: 'DOC_SERVICE',
     targetPath: '/documents/:id',
     workspaceScoped: true,
+    actionKey: 'document:read'
   }
 ];
 
@@ -40,7 +46,7 @@ let dynamicRouter: DynamicRouter;
 
 // Initialize routes on startup
 routeRepository.getRoutes().then((routes) => {
-  dynamicRouter = new DynamicRouter(routes);
+  dynamicRouter = new DynamicRouter(routes, authzService);
   console.log(`Loaded ${routes.length} routes into DynamicRouter`);
 });
 
@@ -57,6 +63,11 @@ app.all('*', async (c) => {
   const match = dynamicRouter.findMatch(c.req.method, c.req.path);
   if (!match) {
     return c.json({ error: 'Route not found' }, 404);
+  }
+
+  const authorized = await dynamicRouter.authorize(match, c.req.raw);
+  if (!authorized) {
+    return c.json({ error: 'Forbidden' }, 403);
   }
 
   try {

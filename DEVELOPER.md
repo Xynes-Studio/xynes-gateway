@@ -5,16 +5,21 @@
 
 ## Architecture
 ### Core Components
-- **DynamicRouter** (`src/router/`): Matches incoming requests against a list of configured routes. Supports path parameters (e.g., `/workspaces/:id`).
+- **DynamicRouter** (`src/router/`): Matches incoming requests against a list of configured routes. Supports path parameters (e.g., `/workspaces/:id`). Now includes **RBAC** checks via `AuthzService`.
 - **ProxyService** (`src/services/`): Handles the actual HTTP forwarding to downstream services. It handles header propagation (like `X-Workspace-Id`) and URL construction.
+- **AuthzService** (`src/services/`): Client for the external Authorization Service. Checks permissions before proxying.
 - **RouteRepository** (`src/data/`): Abstraction for loading routes. Currently supports an In-Memory implementation, designed to be swapped with a Postgres implementation.
 
 ### Flow
 1. **Request In**: Client sends HTTP request to Gateway.
 2. **Lookup**: `DynamicRouter` finds a matching `Route` based on Method and Path.
-3. **Match**: If matched, extracts parameters (`:workspaceId`, etc.).
-4. **Proxy**: `ProxyService` constructs the target URL and forwards the request.
-5. **Response**: Gateway streams the downstream response back to the Client.
+3. **Authorize**: 
+    - If `Route` has an `actionKey` (e.g., `document:read`), Gateway extracts `userId` (header) and `workspaceId` (params).
+    - Calls `AuthzService` to validate permissions.
+    - If valid -> Proceed. If invalid -> Return **403 Forbidden**.
+4. **Match**: If matched, extracts parameters (`:workspaceId`, etc.).
+5. **Proxy**: `ProxyService` constructs the target URL and forwards the request.
+6. **Response**: Gateway streams the downstream response back to the Client.
 
 ## Development
 
@@ -25,6 +30,12 @@
 ```bash
 bun install
 ```
+
+### Environment Variables
+Configure via `.env` or system environment:
+- `PORT`: Gateway port (default: 3000)
+- `DOC_SERVICE_URL`: URL for Document Service (default: http://localhost:3001)
+- `AUTHZ_SERVICE_URL`: URL for Authz Service (default: http://localhost:3002)
 
 ### Running Locally
 ```bash
@@ -39,7 +50,7 @@ bun test           # Run all tests
 bun test --coverage # Check coverage (Must be > 80%)
 ```
 
-## adding Routes
+## Adding Routes
 Currently, routes are seeded in-memory in `src/index.ts`.
 To add a route, append to the `initialRoutes` array:
 ```typescript
@@ -49,7 +60,8 @@ To add a route, append to the `initialRoutes` array:
   method: 'GET',
   serviceKey: 'RESOURCE_SERVICE', // Must be mapped in serviceMap
   targetPath: '/resource/:id',
-  workspaceScoped: true // Adds X-Workspace-Id header if present in params
+  workspaceScoped: true, // Adds X-Workspace-Id header if present in params
+  actionKey: 'resource:read' // Optional: Enforce RBAC
 }
 ```
 
@@ -57,11 +69,10 @@ To add a route, append to the `initialRoutes` array:
 - `src/config`: Environment configuration.
 - `src/data`: Data access layer (Repositories).
 - `src/router`: Routing logic and matching algorithms.
-- `src/services`: Business logic and external service integrators (Proxy).
+- `src/services`: Business logic and external service integrators (Proxy, Authz).
 - `src/tests`: Integration tests.
 - `src/types`: Shared TypeScript interfaces.
 
 ## Future Improvements
 - Implement `PostgresRouteRepository` to load routes from `platform.routes`.
-- Add Authentication & Authorization middleware.
 - Add Rate Limiting.

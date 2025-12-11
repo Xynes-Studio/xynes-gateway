@@ -1,11 +1,14 @@
 
 import type { Route, RouteMatch } from '../types';
+import type { IAuthzService } from '../services/authzService';
 
 export class DynamicRouter {
   private routes: Route[];
+  private authzService: IAuthzService;
 
-  constructor(routes: Route[]) {
+  constructor(routes: Route[], authzService: IAuthzService) {
     this.routes = routes;
+    this.authzService = authzService;
   }
 
   /**
@@ -59,5 +62,31 @@ export class DynamicRouter {
     }
 
     return params;
+  }
+
+  /**
+   * Authorizes the request using AuthzService
+   */
+  async authorize(match: RouteMatch, request: Request): Promise<boolean> {
+    const { route, params } = match;
+
+    // If no actionKey, it's public (or at least not RBAC protected by this gate)
+    if (!route.actionKey) {
+      return true;
+    }
+
+    const userId = request.headers.get('X-XS-User-Id');
+    if (!userId) {
+      console.warn(`[DynamicRouter] Blocked request to ${route.pathPattern}: Missing X-XS-User-Id`);
+      return false; // Treat missing header as unauthorized
+    }
+
+    const workspaceId = params.workspaceId;
+    if (!workspaceId) {
+       console.warn(`[DynamicRouter] Blocked request to ${route.pathPattern}: Missing workspaceId in params`);
+       return false;
+    }
+
+    return this.authzService.check(userId, workspaceId, route.actionKey);
   }
 }

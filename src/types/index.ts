@@ -6,6 +6,7 @@ export interface Route {
   serviceKey: string; // e.g., 'DOC_SERVICE'
   targetPath: string; // e.g., '/documents/:id'
   workspaceScoped: boolean;
+  actionKey?: string; // e.g., 'document:read'
 }
 
 export interface RouteMatch {
