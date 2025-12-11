@@ -20,3 +20,6 @@ export interface RouteMatch {
   route: Route;
   params: Record<string, string>;
 }
+
+// Re-export envelope types
+export * from './envelope';

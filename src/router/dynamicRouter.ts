@@ -1,8 +1,12 @@
 
 import { config } from '../infra/config';
+import type { Context } from 'hono';
 import type { Route, RouteMatch } from '../types';
 import type { IAuthzService } from '../services/authzService';
 import { telemetryService } from '../services/telemetryService';
+import { createSuccessResponse, createErrorResponse } from '../types/envelope';
+import { generateRequestId } from '../utils/requestId';
+import { mapStatusToErrorCode, extractErrorFromBody, getDefaultMessageForCode } from '../utils/errorMapper';
 
 export class DynamicRouter {
   private routes: Route[];
@@ -98,14 +102,16 @@ export class DynamicRouter {
   /**
    * Proxies the request to the downstream service action endpoint.
    */
-  async proxyRequest(match: RouteMatch, request: Request, query: Record<string, string>): Promise<Response> {
+  async proxyRequest(match: RouteMatch, request: Request, query: Record<string, string>, requestId?: string): Promise<Response> {
     const { route, params } = match;
     const { serviceKey, actionKey } = route;
     const startTime = Date.now();
+    const reqId = requestId || generateRequestId();
 
     if (!serviceKey || !actionKey) {
        console.error(`[DynamicRouter] Route ${route.pathPattern} missing serviceKey or actionKey`);
-       return new Response(JSON.stringify({ error: { code: 'INTERNAL_ERROR', message: 'Route misconfiguration' } }), { status: 500, headers: { 'Content-Type': 'application/json' } });
+       const errorResponse = createErrorResponse('INTERNAL_ERROR', 'Route misconfiguration', reqId);
+       return new Response(JSON.stringify(errorResponse), { status: 500, headers: { 'Content-Type': 'application/json' } });
     }
 
     // Resolve Service URL
@@ -117,10 +123,11 @@ export class DynamicRouter {
         case 'CMS_CORE':
             serviceUrl = config.services.cms;
             break;
-        default:
+        default: {
              console.error(`[DynamicRouter] Unknown serviceKey: ${serviceKey}`);
-             // Fallback or error?
-             return new Response(JSON.stringify({ error: { code: 'INTERNAL_ERROR', message: 'Service not found' } }), { status: 502, headers: { 'Content-Type': 'application/json' } });
+             const unknownServiceError = createErrorResponse('BAD_GATEWAY', 'Service not found', reqId);
+             return new Response(JSON.stringify(unknownServiceError), { status: 502, headers: { 'Content-Type': 'application/json' } });
+        }
     }
 
     // Construct Action Endpoint URL
@@ -146,7 +153,7 @@ export class DynamicRouter {
             // Clone request to avoid consuming body if we need it later (though we just consume it here)
             // But we can't clone if we already read it? 
             // Better to just read it once.
-            body = await request.json() as any;
+            body = await request.json() as Record<string, unknown>;
         } catch {
             // ignore if no body
         }
@@ -177,23 +184,19 @@ export class DynamicRouter {
     }
 
     let response: Response;
+    let downstreamStatus = 502;
     try {
         response = await fetch(actionEndpoint, {
             method: 'POST',
             headers,
             body: JSON.stringify(actionPayload)
         });
-        
-    } catch (err: any) {
-        console.error(`[DynamicRouter] Proxy error: ${err.message}`);
-         // We must return here, but we also want telemetry for failure?
-         // If proxy fails entirely (network error), we might still want to log telemetry if possible?
-         // Requirement: "even in error cases where we still get an HTTP response"
-         // If we DON'T get a response (fetch throws), maybe we should log that too?
-         // The user story says: "In dynamicRouter.handle, after successfully calling a downstream service (even in error cases where we still get an HTTP response)"
-         // It implies if we get a response. If fetch throws, we construct a 502 response ourselves.
-         // Let's treat the 502 as the response provided by gateway.
-         response = new Response(JSON.stringify({ error: { code: 'BAD_GATEWAY', message: 'Upstream service unavailable' } }), { status: 502, headers: { 'Content-Type': 'application/json' } });
+        downstreamStatus = response.status;
+    } catch (err: unknown) {
+        const errorMessage = err instanceof Error ? err.message : 'Unknown error';
+        console.error(`[DynamicRouter] Proxy error: ${errorMessage}`);
+        const gatewayError = createErrorResponse('BAD_GATEWAY', 'Upstream service unavailable', reqId);
+        response = new Response(JSON.stringify(gatewayError), { status: 502, headers: { 'Content-Type': 'application/json' } });
     }
 
     // Telemetry Logic
@@ -205,33 +208,72 @@ export class DynamicRouter {
         pathPattern: route.pathPattern,
         serviceKey,
         actionKey,
-        statusCode: response.status,
+        statusCode: downstreamStatus,
         durationMs,
         workspaceId,
         userId,
     });
 
-    return response;
+    // Wrap response in standard envelope
+    return this.wrapResponse(response, reqId);
   }
 
-  handle = async (c: any) => {
+  /**
+   * Wraps the downstream response in a standard API envelope.
+   */
+  private async wrapResponse(response: Response, requestId: string): Promise<Response> {
+    const status = response.status;
+    
+    try {
+      const body = await response.json();
+      
+      if (status >= 200 && status < 300) {
+        // Success: wrap data in ApiSuccess envelope
+        const successResponse = createSuccessResponse(body, requestId);
+        return new Response(JSON.stringify(successResponse), {
+          status,
+          headers: { 'Content-Type': 'application/json' }
+        });
+      } else {
+        // Error: extract or construct ApiError envelope
+        const extracted = extractErrorFromBody(body);
+        const errorCode = extracted?.code || mapStatusToErrorCode(status);
+        const errorMessage = extracted?.message || getDefaultMessageForCode(mapStatusToErrorCode(status));
+        
+        const errorResponse = createErrorResponse(errorCode, errorMessage, requestId);
+        return new Response(JSON.stringify(errorResponse), {
+          status,
+          headers: { 'Content-Type': 'application/json' }
+        });
+      }
+    } catch {
+      // If body parsing fails, return generic error
+      const errorCode = mapStatusToErrorCode(status);
+      const errorMessage = getDefaultMessageForCode(errorCode);
+      const errorResponse = createErrorResponse(errorCode, errorMessage, requestId);
+      return new Response(JSON.stringify(errorResponse), {
+        status: status >= 400 ? status : 500,
+        headers: { 'Content-Type': 'application/json' }
+      });
+    }
+  }
+
+  handle = async (c: Context) => {
+      const requestId = c.get('requestId') || generateRequestId();
       const match = this.findMatch(c.req.method, c.req.path);
+      
       if (match) {
           const authorized = await this.authorize(match, c.req.raw);
           if (!authorized) {
-              return c.json({ error: { code: 'FORBIDDEN', message: 'Access Denied' } }, 403);
+              const errorResponse = createErrorResponse('FORBIDDEN', 'Access Denied', requestId);
+              return c.json(errorResponse, 403);
           }
           
-          const response = await this.proxyRequest(match, c.req.raw, c.req.query());
-          
-          // Hono specific response handling if needed, or just return the standard Response object
-          // Hono can return standard Response objects.
-          
-          // We need to ensure we don't double-read body or fail on stream.
-          // Hono's c.req.raw is the standard Request.
-          
+          const response = await this.proxyRequest(match, c.req.raw, c.req.query(), requestId);
           return response;
       }
-      return c.json({ error: { code: 'NOT_FOUND', message: 'Not Found' } }, 404);
+      
+      const notFoundResponse = createErrorResponse('NOT_FOUND', 'Not Found', requestId);
+      return c.json(notFoundResponse, 404);
   }
 }

@@ -64,7 +64,29 @@ The Dynamic Router implements a "Smart Proxy" pattern:
    - `DOC_SERVICE` -> `${DOC_SERVICE_URL}/internal/doc-actions`
    - `CMS_CORE` -> `${CMS_CORE_URL}/internal/cms-actions`
 4. **Payload Construction**: Wraps body, params, and query into a standardized Action Payload.
-5. **Telemetry**: Asynchronously records request metrics to Telemetry Service.
+5. **Telemetry**: Asynchronously records request tracking.
+
+### Standard Response Envelope (GATE-4)
+
+All API responses are wrapped in a standard envelope:
+
+**Success (`ApiSuccess<T>`)**:
+```json
+{
+  "ok": true,
+  "data": { ... },
+  "meta": { "requestId": "req_..." }
+}
+```
+
+**Error (`ApiError`)**:
+```json
+{
+  "ok": false,
+  "error": { "code": "ERROR_CODE", "message": "Human readable message" },
+  "meta": { "requestId": "req_..." }
+}
+```
 
 ### Configuration
 

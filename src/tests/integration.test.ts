@@ -9,7 +9,7 @@ describe('Gateway Integration', () => {
     beforeEach(() => {
         global.fetch = vi.fn(() => 
             Promise.resolve(new Response(JSON.stringify({ status: 'ok' }), { status: 200 }))
-        ) as any;
+        ) as unknown as typeof fetch;
     });
 
     afterEach(() => {
@@ -41,7 +41,7 @@ describe('Gateway Integration', () => {
                 }));
             }
             return Promise.reject(new Error(`Unknown URL: ${urlStr}`));
-        }) as any;
+        }) as unknown as typeof fetch;
 
         const req = new Request('http://localhost/workspaces/workspace-1/documents', {
             method: 'POST',
@@ -56,7 +56,15 @@ describe('Gateway Integration', () => {
         
         expect(res.status).toBe(200);
         const body = await res.json();
-        expect(body).toEqual({ id: 'doc-1', title: 'Test Doc' });
+        
+        // Assert Envelope Structure
+        expect(body).toEqual(expect.objectContaining({
+            ok: true,
+            data: { id: 'doc-1', title: 'Test Doc' },
+            meta: expect.objectContaining({
+                requestId: expect.stringMatching(/^req_/)
+            })
+        }));
     });
 
     it('Unmatched path handled by dynamicRouter (404 for now)', async () => {
@@ -65,7 +73,15 @@ describe('Gateway Integration', () => {
         // Currently dynamicRouter.handle returns 404 for default catch-all
         expect(res.status).toBe(404);
         const body = await res.json();
-        expect(body).toEqual({ error: { code: 'NOT_FOUND', message: 'Not Found' } });
+        
+        // Assert Envelope Structure for Error
+        expect(body).toEqual(expect.objectContaining({
+            ok: false,
+            error: { code: 'NOT_FOUND', message: 'Not Found' },
+            meta: expect.objectContaining({
+                requestId: expect.stringMatching(/^req_/)
+            })
+        }));
     });
 
     // Test for a "matched" route if dynamicRouter logic is partially active
