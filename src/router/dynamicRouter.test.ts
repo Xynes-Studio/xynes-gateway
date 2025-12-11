@@ -1,5 +1,15 @@
-
 import { describe, it, expect, beforeEach, vi, type Mock } from 'vitest';
+
+vi.mock('../infra/config', () => ({
+  config: {
+    services: {
+      docs: 'http://localhost:3001',
+      cms: 'http://localhost:3003',
+      authz: 'http://localhost:3002'
+    }
+  }
+}));
+
 import { DynamicRouter } from './dynamicRouter';
 import type { Route, RouteMatch } from '../types';
 import type { IAuthzService } from '../services/authzService';
@@ -255,7 +265,7 @@ describe('DynamicRouter', () => {
 
         (global.fetch as unknown as Mock).mockResolvedValue(new Response('{"id":"456"}', { status: 200 }));
 
-        const response = await router.proxyRequest(match, req, { version: 'v1' });
+        await router.proxyRequest(match, req, { version: 'v1' });
         
          const callArgs = (global.fetch as unknown as Mock).mock.calls[0];
          if (!callArgs) throw new Error('Fetch not called');

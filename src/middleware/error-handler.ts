@@ -1,5 +1,5 @@
 
-import type { Context, Next } from 'hono';
+import type { Context } from 'hono';
 import { DomainError } from '../types';
 
 export const errorHandler = async (err: Error, c: Context) => {

@@ -1,4 +1,5 @@
 
+import { config } from '../infra/config';
 import type { Route, RouteMatch } from '../types';
 import type { IAuthzService } from '../services/authzService';
 
@@ -109,10 +110,10 @@ export class DynamicRouter {
     let serviceUrl = '';
     switch (serviceKey) {
         case 'DOC_SERVICE':
-            serviceUrl = (globalThis as any).config?.DOC_SERVICE_URL || process.env.DOC_SERVICE_URL || 'http://localhost:3001';
+            serviceUrl = config.services.docs;
             break;
         case 'CMS_CORE':
-            serviceUrl = (globalThis as any).config?.CMS_CORE_URL || process.env.CMS_CORE_URL || 'http://localhost:3003';
+            serviceUrl = config.services.cms;
             break;
         default:
              console.error(`[DynamicRouter] Unknown serviceKey: ${serviceKey}`);
@@ -141,7 +142,7 @@ export class DynamicRouter {
     if (request.method !== 'GET' && request.method !== 'HEAD') {
         try {
             body = await request.json() as any;
-        } catch (e) {
+        } catch {
             // ignore if no body
         }
     }

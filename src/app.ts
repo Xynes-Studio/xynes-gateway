@@ -19,7 +19,7 @@ export const createApp = async () => {
   app.get('/health', (c) => c.json({ status: 'ok' }));
 
   // Dependencies
-  const authzService = new AuthzService(config.AUTHZ_SERVICE_URL);
+  const authzService = new AuthzService(config.services.authz);
   
   // Initial Routes (Mock for now, will come from DB later)
   const initialRoutes: Route[] = [

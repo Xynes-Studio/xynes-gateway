@@ -5,8 +5,8 @@ import { config } from './infra/config';
 
 const start = async () => {
   const app = await createApp();
-  const port = parseInt(config.PORT || '3000');
-  
+  const port = config.port;
+
   console.log(`Server is running on port ${port}`);
   
   serve({
