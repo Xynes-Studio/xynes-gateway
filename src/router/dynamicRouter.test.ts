@@ -47,7 +47,7 @@ describe('DynamicRouter', () => {
 
   describe('matchPath', () => {
     it('should match a static path', () => {
-      const route = mockRoutes[2];
+      const route = mockRoutes[2]!;
       const match = router.matchPath(route.pathPattern, '/public/stats');
       expect(match).toEqual({});
     });
@@ -154,6 +154,138 @@ describe('DynamicRouter', () => {
         expect(result).toBe(false);
         // Expect 'anonymous' or similar? Or maybe just fail early?
         // Let's fail early for safety if no user id.
+    });
+  });
+  describe('proxyRequest', () => {
+    beforeEach(() => {
+        global.fetch = vi.fn() as unknown as typeof fetch;
+    });
+
+    it('should proxy request to DOC_SERVICE with correct payload and headers', async () => {
+        const route = mockRoutes[0];
+        const match = { route: route!, params: { workspaceId: '123' } };
+        const req = new Request('http://localhost/workspaces/123/documents', {
+            method: 'POST',
+            headers: {
+                'X-XS-User-Id': 'user-1',
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ title: 'New Doc' })
+        });
+
+        (global.fetch as unknown as Mock).mockResolvedValue(new Response('{"id":"doc-1"}', { status: 201 }));
+
+        const response = await router.proxyRequest(match, req, {});
+        
+        expect(global.fetch).toHaveBeenCalledWith(
+            'http://localhost:3001/internal/doc-actions',
+            expect.objectContaining({
+                method: 'POST',
+                headers: expect.any(Headers),
+                body: expect.any(String)
+            })
+        );
+
+        const callArgs = (global.fetch as unknown as Mock).mock.calls[0];
+        if (!callArgs) throw new Error('Fetch not called');
+        
+        const sentBody = JSON.parse(callArgs[1].body);
+        
+        expect(sentBody).toEqual({
+            actionKey: 'document:create',
+            payload: {
+                body: { title: 'New Doc' },
+                params: { workspaceId: '123' },
+                query: {}
+            }
+        });
+
+        const headers = callArgs[1].headers as Headers;
+        expect(headers.get('X-XS-User-Id')).toBe('user-1');
+        expect(headers.get('X-Workspace-Id')).toBe('123');
+        
+        expect(response.status).toBe(201);
+        const resBody = await response.json();
+        expect(resBody).toEqual({ id: 'doc-1' });
+    });
+    
+    it('should proxy GET request with params and query', async () => {
+        const route = mockRoutes[1];
+        const match = { route: route!, params: { workspaceId: '123', id: '456' } };
+        const req = new Request('http://localhost/workspaces/123/documents/456?version=v1', {
+            method: 'GET',
+            headers: {
+                'X-XS-User-Id': 'user-1'
+            }
+        });
+
+        (global.fetch as unknown as Mock).mockResolvedValue(new Response('{"id":"456"}', { status: 200 }));
+
+        const response = await router.proxyRequest(match, req, { version: 'v1' });
+        
+         const callArgs = (global.fetch as unknown as Mock).mock.calls[0];
+         if (!callArgs) throw new Error('Fetch not called');
+         const sentBody = JSON.parse(callArgs[1].body);
+         
+         expect(sentBody).toEqual({
+             actionKey: 'document:read',
+             payload: {
+                 body: {}, // GET has no body
+                 params: { workspaceId: '123', id: '456' },
+                 query: { version: 'v1' }
+             }
+         });
+    });
+
+    it('should return 500 if route misconfigured', async () => {
+        const badRoute: Route = { ...mockRoutes[0]!, serviceKey: '' };
+        const match = { route: badRoute, params: {} };
+        const req = new Request('http://localhost/oops');
+        
+        const response = await router.proxyRequest(match, req, {});
+        expect(response.status).toBe(500);
+    });
+
+     it('should return 502 if fetch fails', async () => {
+        const route = mockRoutes[0];
+        const match = { route: route!, params: { workspaceId: '123' } };
+        const req = new Request('http://localhost/workspaces/123/documents', { method: 'POST' });
+
+        (global.fetch as unknown as Mock).mockRejectedValue(new Error('Network error'));
+
+        const response = await router.proxyRequest(match, req, {});
+        expect(response.status).toBe(502);
+    });
+
+    it('should return 502 if serviceKey is unknown', async () => {
+        const route = { ...mockRoutes[0]!, serviceKey: 'UNKNOWN_SERVICE' };
+        const match = { route, params: {} };
+        const req = new Request('http://localhost/oops');
+        
+        const response = await router.proxyRequest(match, req, {});
+        expect(response.status).toBe(502);
+    });
+
+    it('should handle request body parsing error gracefully', async () => {
+        const route = mockRoutes[0]!;
+        const match = { route, params: { workspaceId: '123' } };
+        
+        const req = {
+            method: 'POST',
+            headers: new Headers(),
+            json: vi.fn().mockRejectedValue(new Error('Invalid JSON'))
+        } as unknown as Request;
+
+        (global.fetch as unknown as Mock).mockResolvedValue(new Response('{}', { status: 200 }));
+
+        await router.proxyRequest(match, req, {});
+        
+        // Should proceed with empty body
+        const callArgs = (global.fetch as unknown as Mock).mock.calls[0];
+        if (!callArgs) throw new Error('Fetch not called');
+        
+        const sentBody = JSON.parse(callArgs[1].body);
+        expect(sentBody.payload.body).toEqual({});
     });
   });
 });

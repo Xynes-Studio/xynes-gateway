@@ -51,3 +51,20 @@ The gateway is built using Bun and Hono. It acts as the entry point for all Xyne
 ### Adding Routes
 
 Currently, routes are seeded in-memory in `src/app.ts`. Future updates will fetch routes from Postgres.
+
+## Proxy Architecture (GATE-2)
+
+The Dynamic Router implements a "Smart Proxy" pattern:
+1. **Matching**: Matches incoming `method` + `path` to a `Route`.
+2. **Authorization**: Checks `X-XS-User-Id` against RBAC (Authz Service).
+3. **Action Mapping**: Maps matched route to a downstream "Action" endpoint.
+   - `DOC_SERVICE` -> `${DOC_SERVICE_URL}/internal/doc-actions`
+   - `CMS_CORE` -> `${CMS_CORE_URL}/internal/cms-actions`
+4. **Payload Construction**: Wraps body, params, and query into a standardized Action Payload.
+
+### Configuration
+
+Ensure the following environment variables are set:
+- `DOC_SERVICE_URL`: URL of the Document Service (default: `http://localhost:3001`)
+- `CMS_CORE_URL`: URL of the CMS Core Service (default: `http://localhost:3003`)
+- `AUTHZ_SERVICE_URL`: URL of the Authorization Service (default: `http://localhost:3002`)

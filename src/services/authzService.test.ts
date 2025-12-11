@@ -7,7 +7,7 @@ describe('AuthzService', () => {
 
   beforeEach(() => {
     service = new AuthzService('http://mock-authz');
-    global.fetch = vi.fn();
+    global.fetch = vi.fn() as unknown as typeof fetch;
   });
 
   afterEach(() => {
