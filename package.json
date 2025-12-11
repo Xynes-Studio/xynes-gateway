@@ -5,6 +5,7 @@
   "private": true,
   "devDependencies": {
     "@types/bun": "^1.3.4",
+    "@vitest/coverage-v8": "^4.0.15",
     "vitest": "^4.0.15"
   },
   "peerDependencies": {

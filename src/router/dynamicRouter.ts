@@ -89,4 +89,27 @@ export class DynamicRouter {
 
     return this.authzService.check(userId, workspaceId, route.actionKey);
   }
+
+  handle = async (c: any) => {
+      const match = this.findMatch(c.req.method, c.req.path);
+      if (match) {
+          // Placeholder: Just return 404 for now as per acceptance criteria: "Unmatched paths go into dynamicRouter.handle (can just 404 for now)"
+          // Wait, the requirement says "Unmatched paths go into dynamicRouter.handle".
+          // If it matches a dynamic route, we should probably do something?
+          // "Unmatched paths go into dynamicRouter.handle (can just 404 for now)."
+          // This phrasing is slightly ambiguous.
+          // Option A: "Unmatched by defined static routes (like /health) go to dynamicRouter.handle. Inside handle, if it matches a dynamic route, proxy it. If NOT, 404."
+          // Since proxying isn't in scope yet (it's in GATE-2), I will finding a match but returning 404 or a placeholder message?
+          // "Unmatched paths go into dynamicRouter.handle (can just 404 for now)." -> This likely refers to the fact that we haven't implemented the proxy logic yet.
+          // But I WILL implement the match check logic to show it's working.
+          
+          const authorized = await this.authorize(match, c.req.raw);
+          if (!authorized) {
+              return c.json({ error: { code: 'FORBIDDEN', message: 'Access Denied' } }, 403);
+          }
+          
+          return c.json({ status: "matched", routeId: match.route.id }, 200); // Temporary response to prove matching works
+      }
+      return c.json({ error: { code: 'NOT_FOUND', message: 'Not Found' } }, 404);
+  }
 }
