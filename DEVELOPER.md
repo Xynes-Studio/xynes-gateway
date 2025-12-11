@@ -12,6 +12,9 @@ The gateway is built using Bun and Hono. It acts as the entry point for all Xyne
 - **Middleware**:
   - `logger.ts`: Request logging.
   - `error-handler.ts`: Standardized error responses.
+- **Services**:
+  - `authzService.ts`: Integration with Authz Service.
+  - `telemetryService.ts`: Integration with Telemetry Service.
 
 ## Development
 
@@ -61,6 +64,7 @@ The Dynamic Router implements a "Smart Proxy" pattern:
    - `DOC_SERVICE` -> `${DOC_SERVICE_URL}/internal/doc-actions`
    - `CMS_CORE` -> `${CMS_CORE_URL}/internal/cms-actions`
 4. **Payload Construction**: Wraps body, params, and query into a standardized Action Payload.
+5. **Telemetry**: Asynchronously records request metrics to Telemetry Service.
 
 ### Configuration
 

@@ -5,7 +5,8 @@ vi.mock('../infra/config', () => ({
     services: {
       docs: 'http://localhost:3001',
       cms: 'http://localhost:3003',
-      authz: 'http://localhost:3002'
+      authz: 'http://localhost:3002',
+      telemetry: 'http://localhost:3004'
     }
   }
 }));
@@ -330,6 +331,100 @@ describe('DynamicRouter', () => {
         
         const sentBody = JSON.parse(callArgs[1].body);
         expect(sentBody.payload.body).toEqual({});
+    });
+
+    it('should send telemetry event on successful proxy', async () => {
+        const route = mockRoutes[0];
+        const match = { route: route!, params: { workspaceId: '123' } };
+        const req = new Request('http://localhost/workspaces/123/documents', {
+             method: 'POST',
+             headers: { 'X-XS-User-Id': 'user-1' }
+        });
+
+        // Mock fetch to handle both calls
+        (global.fetch as unknown as Mock).mockImplementation(async (url) => {
+            if (url.includes('doc-actions')) {
+                return new Response('{"id":"doc-1"}', { status: 201 });
+            }
+            if (url.includes('telemetry-actions')) {
+                return new Response('{"id":"evt-1"}', { status: 201 });
+            }
+            return new Response('Not Found', { status: 404 });
+        });
+
+        await router.proxyRequest(match, req, {});
+        
+        // Wait for fire-and-forget telemetry
+        await new Promise(resolve => setTimeout(resolve, 0));
+
+        expect(global.fetch).toHaveBeenCalledTimes(2);
+        
+        const telemetryCall = (global.fetch as unknown as Mock).mock.calls.find(call => (call[0] as string).includes('telemetry-actions'));
+        expect(telemetryCall).toBeDefined();
+        
+        const body = JSON.parse(telemetryCall![1].body);
+        expect(body.actionKey).toBe('telemetry.event.ingest');
+        expect(body.payload.source).toBe('gateway');
+        expect(body.payload.eventType).toBe('http.request');
+        expect(body.payload.targetType).toBe('service');
+        expect(body.payload.targetId).toBe('DOC_SERVICE');
+        expect(body.payload.metadata.statusCode).toBe(201);
+        expect(body.payload.metadata.userId).toBe('user-1');
+        expect(body.payload.metadata.workspaceId).toBe('123');
+        expect(body.payload.metadata.durationMs).toBeGreaterThanOrEqual(0);
+    });
+
+    it('should send telemetry event even if proxy returns error status', async () => {
+        const route = mockRoutes[0];
+        const match = { route: route!, params: { workspaceId: '123' } };
+        const req = new Request('http://localhost/workspaces/123/documents', { method: 'POST' });
+
+        (global.fetch as unknown as Mock).mockImplementation(async (url) => {
+            if (url.includes('doc-actions')) {
+                 // Downstream service internal error
+                return new Response('{"error":"oops"}', { status: 500 });
+            }
+            if (url.includes('telemetry-actions')) {
+                return new Response('{"id":"evt-1"}', { status: 201 });
+            }
+            return new Response('Not Found', { status: 404 });
+        });
+
+        const response = await router.proxyRequest(match, req, {});
+        expect(response.status).toBe(500);
+
+        await new Promise(resolve => setTimeout(resolve, 0));
+
+        const telemetryCall = (global.fetch as unknown as Mock).mock.calls.find(call => (call[0] as string).includes('telemetry-actions'));
+        expect(telemetryCall).toBeDefined();
+        const body = JSON.parse(telemetryCall![1].body);
+        expect(body.payload.metadata.statusCode).toBe(500);
+    });
+
+    it('should NOT fail request if telemetry fails', async () => {
+        const route = mockRoutes[0];
+        const match = { route: route!, params: { workspaceId: '123' } };
+        const req = new Request('http://localhost/workspaces/123/documents', { method: 'POST' });
+        const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+        (global.fetch as unknown as Mock).mockImplementation(async (url) => {
+            if (url.includes('doc-actions')) {
+                return new Response('{"id":"doc-1"}', { status: 201 });
+            }
+            if (url.includes('telemetry-actions')) {
+                return Promise.reject(new Error('Telemetry Down'));
+            }
+            return new Response('Not Found', { status: 404 });
+        });
+
+        const response = await router.proxyRequest(match, req, {});
+        expect(response.status).toBe(201); // Main request succeeds
+
+        await new Promise(resolve => setTimeout(resolve, 0));
+
+        // Should have logged error
+        expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('[TelemetryService] Error: Telemetry Down'));
+        consoleSpy.mockRestore();
     });
   });
 });

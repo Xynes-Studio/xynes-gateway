@@ -1,0 +1,67 @@
+
+import { config } from '../infra/config';
+
+export interface TelemetryRequestMetadata {
+  method: string;
+  path: string;
+  pathPattern: string;
+  serviceKey: string;
+  actionKey: string;
+  statusCode: number;
+  durationMs: number;
+  workspaceId: string | null;
+  userId: string | null;
+}
+
+export interface ITelemetryService {
+  trackRequest(metadata: TelemetryRequestMetadata): void;
+}
+
+export class TelemetryService implements ITelemetryService {
+  private telemetryUrl: string;
+
+  constructor() {
+    this.telemetryUrl = `${config.services.telemetry}/internal/telemetry-actions`;
+  }
+
+  trackRequest(metadata: TelemetryRequestMetadata): void {
+    const telemetryPayload = {
+      source: "gateway",
+      eventType: "http.request",
+      name: "gateway.request.completed",
+      targetType: "service",
+      targetId: metadata.serviceKey, // Using serviceKey as targetId
+      metadata: metadata // Passing the whole metadata object as metadata field
+    };
+
+    const actionPayload = {
+      actionKey: "telemetry.event.ingest",
+      payload: telemetryPayload
+    };
+    
+    // Fire and forget
+    (async () => {
+        try {
+            const headers = new Headers();
+            headers.set('Content-Type', 'application/json');
+            if (metadata.userId) headers.set('X-XS-User-Id', metadata.userId);
+            if (metadata.workspaceId) headers.set('X-Workspace-Id', metadata.workspaceId);
+
+            const response = await fetch(this.telemetryUrl, {
+                method: 'POST',
+                headers,
+                body: JSON.stringify(actionPayload)
+            });
+
+            if (!response.ok) {
+                 const text = await response.text();
+                 console.error(`[TelemetryService] Ingest failed: ${response.status} ${text}`);
+            }
+        } catch (error: any) {
+            console.error(`[TelemetryService] Error: ${error.message}`);
+        }
+    })();
+  }
+}
+
+export const telemetryService = new TelemetryService();
