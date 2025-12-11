@@ -1,14 +1,62 @@
-
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { createApp } from '../app';
 
-describe('Gateway Integration Tests', () => {
+describe('Gateway Integration', () => {
+    // We need to wait for the router to initialize (it's async in index.ts)
+    // In a real app we might expose a ready promise. 
+    // For now we trust it loads fast since it is in-memory.
+    
+    beforeEach(() => {
+        global.fetch = vi.fn(() => 
+            Promise.resolve(new Response(JSON.stringify({ status: 'ok' }), { status: 200 }))
+        ) as any;
+    });
+
+    afterEach(() => {
+        vi.restoreAllMocks();
+    });
+
     it('GET /health returns 200 OK', async () => {
         const app = await createApp();
         const res = await app.request('/health');
         expect(res.status).toBe(200);
         const body = await res.json();
         expect(body).toEqual({ status: 'ok' });
+    });
+
+    it('should proxy POST /workspaces/:id/documents to DOC_SERVICE', async () => {
+        const app = await createApp();
+        
+        // Mock fetch to handle both Authz and Downstream
+        // Mock fetch to handle both Authz and Downstream
+        global.fetch = vi.fn((url: string | URL | Request, _init?: RequestInit) => {
+            const urlStr = url.toString();
+            if (urlStr.includes('/authz/check')) {
+                return Promise.resolve(new Response(JSON.stringify({ allowed: true }), { status: 200 }));
+            }
+            if (urlStr.includes('/internal/doc-actions')) { // Updated to match new DynamicRouter logic
+                 return Promise.resolve(new Response(JSON.stringify({ id: 'doc-1', title: 'Test Doc' }), {
+                    status: 200,
+                    headers: { 'Content-Type': 'application/json' }
+                }));
+            }
+            return Promise.reject(new Error(`Unknown URL: ${urlStr}`));
+        }) as any;
+
+        const req = new Request('http://localhost/workspaces/workspace-1/documents', {
+            method: 'POST',
+            body: JSON.stringify({ title: 'Test Doc' }),
+            headers: { 
+                'Content-Type': 'application/json',
+                'X-XS-User-Id': 'user-1'
+            }
+        });
+
+        const res = await app.request(req);
+        
+        expect(res.status).toBe(200);
+        const body = await res.json();
+        expect(body).toEqual({ id: 'doc-1', title: 'Test Doc' });
     });
 
     it('Unmatched path handled by dynamicRouter (404 for now)', async () => {

@@ -36,7 +36,6 @@ export class ProxyService {
       method: route.method,
       headers,
       body: request.body,
-      // @ts-ignore: duplex is needed for some node/bun versions for streaming bodies
       duplex: 'half'
     });
   }

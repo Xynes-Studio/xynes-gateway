@@ -81,12 +81,15 @@ export class DynamicRouter {
       return false; // Treat missing header as unauthorized
     }
 
-    const workspaceId = params.workspaceId;
-    if (!workspaceId) {
+    // Resolve workspaceId
+    const workspaceId: string | null = params.workspaceId || null;
+
+    if (route.workspaceScoped && !workspaceId) {
        console.warn(`[DynamicRouter] Blocked request to ${route.pathPattern}: Missing workspaceId in params`);
        return false;
     }
 
+    // If not workspace scoped, workspaceId might be null, which is fine.
     return this.authzService.check(userId, workspaceId, route.actionKey);
   }
 
