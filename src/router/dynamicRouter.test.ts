@@ -196,9 +196,12 @@ describe('DynamicRouter', () => {
         const calls = (mockAuthzService.check as Mock).mock.calls;
         expect(calls.length).toBeGreaterThan(0);
         const args = calls[0];
-        expect(args[0]).toBe('admin-user');
-        expect(args[1]).toBeNull(); // workspaceId
-        expect(args[2]).toBe('admin:write');
+        expect(args).toBeDefined();
+        if (args) {
+            expect(args[0]).toBe('admin-user');
+            expect(args[1]).toBeNull(); // workspaceId
+            expect(args[2]).toBe('admin:write');
+        }
     });
   });
   describe('proxyRequest', () => {
@@ -251,7 +254,14 @@ describe('DynamicRouter', () => {
         
         expect(response.status).toBe(201);
         const resBody = await response.json();
-        expect(resBody).toEqual({ id: 'doc-1' });
+        
+        expect(resBody).toEqual(expect.objectContaining({
+            ok: true,
+            data: { id: 'doc-1' },
+            meta: expect.objectContaining({
+                requestId: expect.stringMatching(/^req_/)
+            })
+        }));
     });
     
     it('should proxy GET request with params and query', async () => {

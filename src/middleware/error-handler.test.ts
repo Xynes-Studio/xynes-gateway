@@ -11,16 +11,24 @@ describe('errorHandler', () => {
         const jsonMock = vi.fn();
         const c = {
             json: jsonMock,
+            get: vi.fn(),
         } as unknown as Context;
 
         await errorHandler(error, c);
 
-        expect(jsonMock).toHaveBeenCalledWith({
-            error: {
-                code: 'INVALID_INPUT',
-                message: 'Invalid input',
-            },
-        }, 400);
+        expect(jsonMock).toHaveBeenCalledWith(
+            expect.objectContaining({
+                ok: false,
+                error: {
+                    code: 'INVALID_INPUT',
+                    message: 'Invalid input',
+                },
+                meta: expect.objectContaining({
+                    requestId: expect.stringMatching(/^req_/)
+                })
+            }),
+            400
+        );
     });
 
     it('should handle generic errors as 500 INTERNAL_SERVER_ERROR', async () => {
@@ -29,6 +37,7 @@ describe('errorHandler', () => {
         const jsonMock = vi.fn();
         const c = {
             json: jsonMock,
+            get: vi.fn(),
         } as unknown as Context;
 
         // Suppress console.error for this test
@@ -36,13 +45,21 @@ describe('errorHandler', () => {
 
         await errorHandler(error, c);
 
-        expect(jsonMock).toHaveBeenCalledWith({
-            error: {
-                code: 'INTERNAL_SERVER_ERROR',
-                message: 'An unexpected error occurred',
-            },
-        }, 500);
+        expect(jsonMock).toHaveBeenCalledWith(
+            expect.objectContaining({
+                ok: false,
+                error: {
+                    code: 'INTERNAL_SERVER_ERROR',
+                    message: 'An unexpected error occurred',
+                },
+                meta: expect.objectContaining({
+                    requestId: expect.stringMatching(/^req_/)
+                })
+            }),
+            500
+        );
         
         consoleSpy.mockRestore();
     });
 });
+
