@@ -1,5 +1,6 @@
+
 export interface IAuthzService {
-  check(userId: string, workspaceId: string, actionKey: string): Promise<boolean>;
+  check(userId: string, workspaceId: string | null, actionKey: string): Promise<boolean>;
 }
 
 export class AuthzService implements IAuthzService {
@@ -9,7 +10,7 @@ export class AuthzService implements IAuthzService {
     this.authzUrl = authzUrl;
   }
 
-  async check(userId: string, workspaceId: string, actionKey: string): Promise<boolean> {
+  async check(userId: string, workspaceId: string | null, actionKey: string): Promise<boolean> {
     try {
       const response = await fetch(`${this.authzUrl}/authz/check`, {
         method: 'POST',

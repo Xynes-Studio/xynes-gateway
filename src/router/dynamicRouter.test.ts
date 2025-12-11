@@ -1,7 +1,7 @@
 
 import { describe, it, expect, beforeEach, vi, type Mock } from 'vitest';
 import { DynamicRouter } from './dynamicRouter';
-import type { Route } from '../types';
+import type { Route, RouteMatch } from '../types';
 import type { IAuthzService } from '../services/authzService';
 
 describe('DynamicRouter', () => {
@@ -41,7 +41,6 @@ describe('DynamicRouter', () => {
     mockAuthzService = {
       check: vi.fn()
     };
-    // @ts-ignore - Constructor hasn't changed yet
     router = new DynamicRouter(mockRoutes, mockAuthzService);
   });
 
@@ -83,6 +82,7 @@ describe('DynamicRouter', () => {
         expect(match).toBeNull();
     });
   });
+
 
   describe('authorize', () => {
     it('should return true if route has no actionKey (public)', async () => {
@@ -138,22 +138,56 @@ describe('DynamicRouter', () => {
             method: 'POST'
         });
 
-        // Assuming strictly required for now as per "Derive userId from header" and "treat missing... as system user... but plumbing must exist"
-        // Let's implement strict check for this test to drive the plumbing logic.
-        // If the requirement means "allow it if missing for now", I can adjust.
-        // But "Acceptance Criteria: Blocks with 403 if authz returns { allowed: false }".
-        // Authz check needs userId. If userId is missing, we can't check.
-        // Let's assume we pass 'system' or fail.
-        // Requirement: "For Sprint 1 we may treat missing X-XS-User-Id as a system user or allow-all, but the plumbing must exist."
-        // I will implement "fail if missing" for the test to ensure I handle extraction, then I can relax it if needed. 
-        // Actually, let's treat missing as 'anonymous' and still call authz.
-        
-        (mockAuthzService.check as Mock).mockResolvedValue(false); // Anonymous likely denied
-
         const result = await router.authorize(match!, req);
         expect(result).toBe(false);
-        // Expect 'anonymous' or similar? Or maybe just fail early?
-        // Let's fail early for safety if no user id.
+    });
+
+    // New tests for workspaceScoped logic
+    it('should fail if route is workspaceScoped but workspaceId is missing in params', async () => {
+        // Manually constructing a match where route is scoped but params missing workspaceId
+        // This simulates a misconfiguration or logic error in matcher, but authorize should guard it.
+        const route = mockRoutes[0]; // workspaceScoped = true
+        const match = { 
+            route, 
+            params: { id: 'doc-1' } // missing workspaceId
+        };
+
+        const result = await router.authorize(match as RouteMatch, new Request('http://localhost/...'));
+        expect(result).toBe(false);
+        expect(mockAuthzService.check).not.toHaveBeenCalled();
+    });
+
+    it('should pass null workspaceId if route is NOT workspaceScoped', async () => {
+        // Create a fake route that is protected (has actionKey) but NOT workspaceScoped
+        const globalRoute: Route = {
+            id: 'global-1',
+            pathPattern: '/admin/settings',
+            method: 'POST',
+            serviceKey: 'ADMIN_SERVICE',
+            targetPath: '/settings',
+            workspaceScoped: false,
+            actionKey: 'admin:write'
+        };
+        const match = { route: globalRoute, params: {} };
+        
+        (mockAuthzService.check as Mock).mockResolvedValue(true);
+
+        const req = new Request('http://localhost/admin/settings', {
+            method: 'POST',
+            headers: { 'X-XS-User-Id': 'admin-user' }
+        });
+
+        const result = await router.authorize(match as RouteMatch, req);
+
+        expect(result).toBe(true);
+        // Expect workspaceId to be null (or undefined depending on implementation, let's say null/undefined)
+        // Checking call arguments
+        const calls = (mockAuthzService.check as Mock).mock.calls;
+        expect(calls.length).toBeGreaterThan(0);
+        const args = calls[0];
+        expect(args[0]).toBe('admin-user');
+        expect(args[1]).toBeNull(); // workspaceId
+        expect(args[2]).toBe('admin:write');
     });
   });
 });

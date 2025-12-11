@@ -17,17 +17,18 @@ describe('Gateway Integration', () => {
 
     it('should proxy POST /workspaces/:id/documents to DOC_SERVICE', async () => {
         // Mock fetch to handle both Authz and Downstream
-        (global.fetch as any).mockImplementation((url: string, init: any) => {
-            if (url.includes('/authz/check')) {
+        vi.stubGlobal('fetch', (url: string | URL | Request, _init?: RequestInit) => {
+            const urlStr = url.toString();
+            if (urlStr.includes('/authz/check')) {
                 return Promise.resolve(new Response(JSON.stringify({ allowed: true }), { status: 200 }));
             }
-            if (url.includes('/documents')) {
-                 return Promise.resolve(new Response(JSON.stringify({ id: 'doc-123' }), {
-                    status: 201,
+            if (urlStr.includes('/documents')) {
+                 return Promise.resolve(new Response(JSON.stringify({ id: 'doc-1', title: 'Test Doc' }), {
+                    status: 200,
                     headers: { 'Content-Type': 'application/json' }
                 }));
             }
-            return Promise.reject(new Error('Unknown URL: ' + url));
+            return Promise.reject(new Error('Unknown URL'));
         });
 
         const req = new Request('http://localhost/workspaces/workspace-1/documents', {

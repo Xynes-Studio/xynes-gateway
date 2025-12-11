@@ -67,24 +67,28 @@ app.all('*', async (c) => {
 
   const authorized = await dynamicRouter.authorize(match, c.req.raw);
   if (!authorized) {
-    return c.json({ error: 'Forbidden' }, 403);
+    return c.json({ 
+      error: {
+        code: 'FORBIDDEN',
+        message: 'Access Denied'
+      } 
+    }, 403);
   }
 
   try {
-    const upstreamRes = await proxyService.proxyRequest(c.req.raw, match);
+        const upstreamRes = await proxyService.proxyRequest(c.req.raw, match);
+        
+        // Hono handles standard Response objects well.
+        return new Response(upstreamRes.body, {
+            status: upstreamRes.status,
+            headers: upstreamRes.headers
+        });
     
-    // Create a new response from the upstream response to ensure compatibility
-    // and avoid "body used" issues if we were to read it.
-    // Hono handles standard Response objects well.
-    return new Response(upstreamRes.body, {
-        status: upstreamRes.status,
-        headers: upstreamRes.headers
-    });
-
-  } catch (error: any) {
-    console.error('Proxy error:', error);
-    return c.json({ error: 'Bad Gateway', details: error.message }, 502);
-  }
+      } catch (error: unknown) {
+        console.error('Proxy error:', error);
+        const message = error instanceof Error ? error.message : 'Unknown error';
+        return c.json({ error: 'Bad Gateway', details: message }, 502);
+      }
 });
 
 const port = parseInt(config.PORT);
