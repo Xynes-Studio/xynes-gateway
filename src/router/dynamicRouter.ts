@@ -2,6 +2,7 @@
 import { config } from '../infra/config';
 import type { Route, RouteMatch } from '../types';
 import type { IAuthzService } from '../services/authzService';
+import { telemetryService } from '../services/telemetryService';
 
 export class DynamicRouter {
   private routes: Route[];
@@ -100,6 +101,7 @@ export class DynamicRouter {
   async proxyRequest(match: RouteMatch, request: Request, query: Record<string, string>): Promise<Response> {
     const { route, params } = match;
     const { serviceKey, actionKey } = route;
+    const startTime = Date.now();
 
     if (!serviceKey || !actionKey) {
        console.error(`[DynamicRouter] Route ${route.pathPattern} missing serviceKey or actionKey`);
@@ -141,6 +143,9 @@ export class DynamicRouter {
     let body = {};
     if (request.method !== 'GET' && request.method !== 'HEAD') {
         try {
+            // Clone request to avoid consuming body if we need it later (though we just consume it here)
+            // But we can't clone if we already read it? 
+            // Better to just read it once.
             body = await request.json() as any;
         } catch {
             // ignore if no body
@@ -165,26 +170,48 @@ export class DynamicRouter {
         headers.set('X-XS-User-Id', userId);
     }
     
-    if (route.workspaceScoped && params.workspaceId) {
-        headers.set('X-Workspace-Id', params.workspaceId);
+    const workspaceId = route.workspaceScoped && params.workspaceId ? params.workspaceId : null;
+    
+    if (workspaceId) {
+        headers.set('X-Workspace-Id', workspaceId);
     }
 
+    let response: Response;
     try {
-        const response = await fetch(actionEndpoint, {
+        response = await fetch(actionEndpoint, {
             method: 'POST',
             headers,
             body: JSON.stringify(actionPayload)
         });
         
-        // Return downstream response directly
-        // We might want to stream the body or just text() it.
-        // For simple JSON APIs, cloning logic is fine.
-        return response;
-
     } catch (err: any) {
         console.error(`[DynamicRouter] Proxy error: ${err.message}`);
-         return new Response(JSON.stringify({ error: { code: 'BAD_GATEWAY', message: 'Upstream service unavailable' } }), { status: 502, headers: { 'Content-Type': 'application/json' } });
+         // We must return here, but we also want telemetry for failure?
+         // If proxy fails entirely (network error), we might still want to log telemetry if possible?
+         // Requirement: "even in error cases where we still get an HTTP response"
+         // If we DON'T get a response (fetch throws), maybe we should log that too?
+         // The user story says: "In dynamicRouter.handle, after successfully calling a downstream service (even in error cases where we still get an HTTP response)"
+         // It implies if we get a response. If fetch throws, we construct a 502 response ourselves.
+         // Let's treat the 502 as the response provided by gateway.
+         response = new Response(JSON.stringify({ error: { code: 'BAD_GATEWAY', message: 'Upstream service unavailable' } }), { status: 502, headers: { 'Content-Type': 'application/json' } });
     }
+
+    // Telemetry Logic
+    const durationMs = Date.now() - startTime;
+    
+    telemetryService.trackRequest({
+        method: request.method,
+        path: request.url,
+        pathPattern: route.pathPattern,
+        serviceKey,
+        actionKey,
+        statusCode: response.status,
+        durationMs,
+        workspaceId,
+        userId,
+    });
+
+    return response;
   }
 
   handle = async (c: any) => {
