@@ -14,6 +14,7 @@ export interface Route {
   targetPath: string; // e.g., '/documents/:id'
   workspaceScoped: boolean;
   actionKey?: string; // e.g., 'document:read'
+  isPublic?: boolean;
 }
 
 export interface RouteMatch {

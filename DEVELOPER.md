@@ -66,6 +66,17 @@ The Dynamic Router implements a "Smart Proxy" pattern:
 4. **Payload Construction**: Wraps body, params, and query into a standardized Action Payload.
 5. **Telemetry**: Asynchronously records request tracking.
 
+### Public Routes (GATE-6)
+
+Routes can be marked as `isPublic: true` to bypass authorization checks:
+
+- If `route.isPublic === true`, the gateway skips `AuthzService.check()` and forwards the request directly.
+- If `route.isPublic === false` (or undefined), normal RBAC enforcement applies.
+
+**Current Public Routes:**
+- `GET /workspaces/:workspaceId/blog` – List published blog entries.
+- `GET /workspaces/:workspaceId/blog/:slug` – Get published blog entry by slug.
+
 ### Standard Response Envelope (GATE-4)
 
 All API responses are wrapped in a standard envelope:

@@ -51,7 +51,8 @@ export const createApp = async () => {
         serviceKey: 'CMS_CORE',
         targetPath: '/blog',
         workspaceScoped: true,
-        actionKey: 'cms.blog_entry.listPublished'
+        actionKey: 'cms.blog_entry.listPublished',
+        isPublic: true
       },
       {
         id: '4',
@@ -60,7 +61,8 @@ export const createApp = async () => {
         serviceKey: 'CMS_CORE',
         targetPath: '/blog/:slug',
         workspaceScoped: true,
-        actionKey: 'cms.blog_entry.getPublishedBySlug'
+        actionKey: 'cms.blog_entry.getPublishedBySlug',
+        isPublic: true
       },
       // Comment routes (GATE-4)
       {

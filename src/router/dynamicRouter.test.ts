@@ -104,6 +104,25 @@ describe('DynamicRouter', () => {
        expect(mockAuthzService.check).not.toHaveBeenCalled();
     });
 
+    it('should return true for public route with actionKey (isPublic=true)', async () => {
+        const publicRoute: Route = {
+            id: 'public-blog',
+            pathPattern: '/blog',
+            method: 'GET',
+            serviceKey: 'CMS',
+            targetPath: '/blog',
+            workspaceScoped: true,
+            actionKey: 'cms.blog.list',
+            isPublic: true
+        };
+        const match = { route: publicRoute, params: {} };
+        const req = new Request('http://localhost/blog');
+        
+        const result = await router.authorize(match as RouteMatch, req);
+        expect(result).toBe(true);
+        expect(mockAuthzService.check).not.toHaveBeenCalled();
+    });
+
     it('should call authz service and return true if allowed', async () => {
       const match = router.findMatch('POST', '/workspaces/123/documents');
       expect(match).toBeDefined();

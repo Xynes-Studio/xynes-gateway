@@ -81,6 +81,11 @@ export class DynamicRouter {
       return true;
     }
 
+    // If route is explicitly public, skip authz
+    if (route.isPublic) {
+      return true;
+    }
+
     const userId = request.headers.get('X-XS-User-Id');
     if (!userId) {
       console.warn(`[DynamicRouter] Blocked request to ${route.pathPattern}: Missing X-XS-User-Id`);
