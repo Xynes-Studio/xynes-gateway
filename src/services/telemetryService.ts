@@ -57,8 +57,9 @@ export class TelemetryService implements ITelemetryService {
                  const text = await response.text();
                  console.error(`[TelemetryService] Ingest failed: ${response.status} ${text}`);
             }
-        } catch (error: any) {
-            console.error(`[TelemetryService] Error: ${error.message}`);
+        } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            console.error(`[TelemetryService] Error: ${message}`);
         }
     })();
   }

@@ -1,18 +1,28 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { createApp } from '../app';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'bun:test';
+
+const pingDbMock = vi.fn();
+vi.module('../infra/db', () => ({
+  pingDb: pingDbMock,
+}));
+
+const { createApp } = await import('../app');
 
 describe('Gateway Integration', () => {
     // We need to wait for the router to initialize (it's async in index.ts)
     // In a real app we might expose a ready promise. 
     // For now we trust it loads fast since it is in-memory.
     
+    const originalFetch = global.fetch;
+
     beforeEach(() => {
+        pingDbMock.mockReset();
         global.fetch = vi.fn(() => 
             Promise.resolve(new Response(JSON.stringify({ status: 'ok' }), { status: 200 }))
         ) as unknown as typeof fetch;
     });
 
     afterEach(() => {
+        global.fetch = originalFetch;
         vi.restoreAllMocks();
     });
 
@@ -21,7 +31,26 @@ describe('Gateway Integration', () => {
         const res = await app.request('/health');
         expect(res.status).toBe(200);
         const body = await res.json();
-        expect(body).toEqual({ status: 'ok' });
+        expect(body).toEqual({ status: 'ok', service: 'xynes-gateway' });
+    });
+
+    it('GET /ready returns 200 when DB is reachable', async () => {
+        pingDbMock.mockResolvedValueOnce(undefined);
+        const app = await createApp();
+        const res = await app.request('/ready');
+        expect(res.status).toBe(200);
+        const body = await res.json();
+        expect(body).toEqual({ status: 'ready' });
+    });
+
+    it('GET /ready returns 503 when DB is unreachable', async () => {
+        pingDbMock.mockRejectedValueOnce(new Error('db down'));
+        const app = await createApp();
+        const res = await app.request('/ready');
+        expect(res.status).toBe(503);
+        const body = await res.json() as { status: string; error?: string };
+        expect(body.status).toBe('not_ready');
+        expect(body.error).toBe('service not ready');
     });
 
     it('should proxy POST /workspaces/:id/documents to DOC_SERVICE', async () => {

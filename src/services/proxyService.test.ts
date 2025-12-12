@@ -1,5 +1,5 @@
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'bun:test';
 import { ProxyService } from './proxyService';
 import type { RouteMatch } from '../types';
 
@@ -13,7 +13,7 @@ describe('ProxyService', () => {
     beforeEach(() => {
         proxyService = new ProxyService(serviceMap);
         // mock global fetch
-        global.fetch = vi.fn() as any;
+        global.fetch = vi.fn() as unknown as typeof fetch;
     });
 
     afterEach(() => {
@@ -39,12 +39,13 @@ describe('ProxyService', () => {
             headers: { 'Content-Type': 'application/json' }
         });
 
-        (global.fetch as any).mockResolvedValue(new Response('{"id":"doc-1"}', { status: 201 }));
+        const fetchMock = global.fetch as unknown as ReturnType<typeof vi.fn>;
+        fetchMock.mockResolvedValue(new Response('{"id":"doc-1"}', { status: 201 }));
 
         const response = await proxyService.proxyRequest(mockRequest, routeMatch);
 
         expect(global.fetch).toHaveBeenCalledTimes(1);
-        const [url, init] = (global.fetch as any).mock.calls[0];
+        const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
         
         expect(url).toBe('http://localhost:3001/documents');
         expect(init.method).toBe('POST');
@@ -68,11 +69,12 @@ describe('ProxyService', () => {
         };
 
         const mockRequest = new Request('http://localhost:3000/workspaces/123/documents/456');
-        (global.fetch as any).mockResolvedValue(new Response('ok', { status: 200 }));
+        const fetchMock = global.fetch as unknown as ReturnType<typeof vi.fn>;
+        fetchMock.mockResolvedValue(new Response('ok', { status: 200 }));
 
         await proxyService.proxyRequest(mockRequest, routeMatch);
 
-        const [url] = (global.fetch as any).mock.calls[0];
+        const [url] = fetchMock.mock.calls[0] as [string];
         expect(url).toBe('http://localhost:3001/documents/456');
     });
 

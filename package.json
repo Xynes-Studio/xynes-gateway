@@ -18,15 +18,17 @@
     "typescript": "^5"
   },
   "scripts": {
-    "start": "bun run src/index.ts",
-    "test": "vitest",
-    "coverage": "vitest run --coverage",
+    "dev": "sh -c 'bun --env-file=\"${XYNES_ENV_FILE:-.env.dev}\" run --watch src/index.ts'",
+    "start": "sh -c 'bun --env-file=\"${XYNES_ENV_FILE:-.env.dev}\" run src/index.ts'",
+    "test": "sh -c 'bun --env-file=\"${XYNES_ENV_FILE:-.env.dev}\" test'",
+    "coverage": "sh -c 'bun --env-file=\"${XYNES_ENV_FILE:-.env.dev}\" test --coverage'",
     "lint": "eslint src --ext .ts"
   },
   "dependencies": {
     "@hono/node-server": "^1.19.7",
     "dotenv": "^17.2.3",
     "hono": "^4.10.8",
+    "postgres": "^3.4.7",
     "zod": "^4.1.13"
   }
 }

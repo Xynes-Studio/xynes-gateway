@@ -21,8 +21,14 @@ The gateway is built using Bun and Hono. It acts as the entry point for all Xyne
 ### Global Standards
 
 - **Folder Structure**: Feature-based separation in `src/`.
-- **Testing**: TDD is mandatory. 80% coverage required. Use `vitest`.
+- **Testing**: TDD is mandatory. 75%+ coverage required. Use `bun test`.
 - **Linting**: Keep code clean.
+
+### Environment
+
+- Scripts load `.env.dev` by default (Docker/dev). Override for host runs:
+  - `XYNES_ENV_FILE=.env.localhost bun run dev`
+  - `XYNES_ENV_FILE=.env.localhost bun run test`
 
 ### Setup
 
@@ -48,7 +54,8 @@ The gateway is built using Bun and Hono. It acts as the entry point for all Xyne
 
 ## Routes
 
-- `GET /health`: Health check. Returns `{ status: "ok" }`.
+- `GET /health`: Liveness check. Returns `{ status: "ok", service: "xynes-gateway" }`.
+- `GET /ready`: Readiness check. Runs a fast Postgres check and returns `{ status: "ready" }` (or 503 with error).
 - `*`: All other routes are handled by the Dynamic Router.
 
 ### Adding Routes

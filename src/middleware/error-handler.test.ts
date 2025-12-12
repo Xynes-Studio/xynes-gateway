@@ -1,5 +1,5 @@
 
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi } from 'bun:test';
 import { errorHandler } from './error-handler';
 import { DomainError } from '../types';
 import type { Context } from 'hono';
@@ -62,4 +62,3 @@ describe('errorHandler', () => {
         consoleSpy.mockRestore();
     });
 });
-
