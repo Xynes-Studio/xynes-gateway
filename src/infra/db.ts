@@ -34,7 +34,15 @@ export async function pingDb(databaseUrl?: string, schemaName?: string): Promise
   }
   const sql = await getClient(resolvedUrl);
   if (schemaName) {
-    await sql`SELECT 1 FROM pg_namespace WHERE nspname = ${schemaName}`;
+    const rows = await sql`
+      SELECT 1
+      FROM pg_namespace
+      WHERE nspname = ${schemaName}
+      LIMIT 1
+    `;
+    if (rows.length === 0) {
+      throw new Error(`Schema not found: ${schemaName}`);
+    }
   } else {
     await sql`SELECT 1`;
   }

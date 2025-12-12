@@ -46,7 +46,7 @@ describe('Gateway Integration', () => {
         expect(res.status).toBe(503);
         const body = await res.json() as { status: string; error?: string };
         expect(body.status).toBe('not_ready');
-        expect(body.error).toContain('db down');
+        expect(body.error).toBe('service not ready');
     });
 
     it('should proxy POST /workspaces/:id/documents to DOC_SERVICE', async () => {

@@ -9,7 +9,8 @@ readyRoute.get('/ready', async (c) => {
     return c.json({ status: 'ready' }, 200);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    return c.json({ status: 'not_ready', error: message }, 503);
+    console.error('Readiness check failed:', message);
+    return c.json({ status: 'not_ready', error: 'service not ready' }, 503);
   }
 });
 
