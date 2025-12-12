@@ -20,8 +20,8 @@
   "scripts": {
     "dev": "sh -c 'bun --env-file=\"${XYNES_ENV_FILE:-.env.dev}\" run --watch src/index.ts'",
     "start": "sh -c 'bun --env-file=\"${XYNES_ENV_FILE:-.env.dev}\" run src/index.ts'",
-    "test": "sh -c 'bun --env-file=\"${XYNES_ENV_FILE:-.env.dev}\" run vitest'",
-    "coverage": "sh -c 'bun --env-file=\"${XYNES_ENV_FILE:-.env.dev}\" run vitest run --coverage'",
+    "test": "sh -c 'bun --env-file=\"${XYNES_ENV_FILE:-.env.dev}\" test'",
+    "coverage": "sh -c 'bun --env-file=\"${XYNES_ENV_FILE:-.env.dev}\" test --coverage'",
     "lint": "eslint src --ext .ts"
   },
   "dependencies": {

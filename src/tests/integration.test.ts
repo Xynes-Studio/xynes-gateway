@@ -1,24 +1,28 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'bun:test';
 
-vi.mock('../infra/db', () => ({
-    pingDb: vi.fn(),
+const pingDbMock = vi.fn();
+vi.module('../infra/db', () => ({
+  pingDb: pingDbMock,
 }));
 
-import { pingDb } from '../infra/db';
-import { createApp } from '../app';
+const { createApp } = await import('../app');
 
 describe('Gateway Integration', () => {
     // We need to wait for the router to initialize (it's async in index.ts)
     // In a real app we might expose a ready promise. 
     // For now we trust it loads fast since it is in-memory.
     
+    const originalFetch = global.fetch;
+
     beforeEach(() => {
+        pingDbMock.mockReset();
         global.fetch = vi.fn(() => 
             Promise.resolve(new Response(JSON.stringify({ status: 'ok' }), { status: 200 }))
         ) as unknown as typeof fetch;
     });
 
     afterEach(() => {
+        global.fetch = originalFetch;
         vi.restoreAllMocks();
     });
 
@@ -31,7 +35,7 @@ describe('Gateway Integration', () => {
     });
 
     it('GET /ready returns 200 when DB is reachable', async () => {
-        (pingDb as unknown as { mockResolvedValueOnce: (v: unknown) => void }).mockResolvedValueOnce(undefined);
+        pingDbMock.mockResolvedValueOnce(undefined);
         const app = await createApp();
         const res = await app.request('/ready');
         expect(res.status).toBe(200);
@@ -40,7 +44,7 @@ describe('Gateway Integration', () => {
     });
 
     it('GET /ready returns 503 when DB is unreachable', async () => {
-        (pingDb as unknown as { mockRejectedValueOnce: (e: unknown) => void }).mockRejectedValueOnce(new Error('db down'));
+        pingDbMock.mockRejectedValueOnce(new Error('db down'));
         const app = await createApp();
         const res = await app.request('/ready');
         expect(res.status).toBe(503);

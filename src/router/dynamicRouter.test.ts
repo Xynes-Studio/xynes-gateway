@@ -1,19 +1,21 @@
-import { describe, it, expect, beforeEach, vi, type Mock } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'bun:test';
+import type { Route, RouteMatch } from '../types';
+import type { IAuthzService } from '../services/authzService';
 
-vi.mock('../infra/config', () => ({
+type MockFn = ReturnType<typeof vi.fn>;
+
+vi.module('../infra/config', () => ({
   config: {
     services: {
       docs: 'http://localhost:3001',
       cms: 'http://localhost:3003',
       authz: 'http://localhost:3002',
-      telemetry: 'http://localhost:3004'
-    }
-  }
+      telemetry: 'http://localhost:3004',
+    },
+  },
 }));
 
-import { DynamicRouter } from './dynamicRouter';
-import type { Route, RouteMatch } from '../types';
-import type { IAuthzService } from '../services/authzService';
+const { DynamicRouter } = await import('./dynamicRouter');
 
 describe('DynamicRouter', () => {
   let router: DynamicRouter;
@@ -53,6 +55,10 @@ describe('DynamicRouter', () => {
       check: vi.fn()
     };
     router = new DynamicRouter(mockRoutes, mockAuthzService);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
   describe('matchPath', () => {
@@ -127,7 +133,7 @@ describe('DynamicRouter', () => {
       const match = router.findMatch('POST', '/workspaces/123/documents');
       expect(match).toBeDefined();
       
-      (mockAuthzService.check as Mock).mockResolvedValue(true);
+      (mockAuthzService.check as unknown as MockFn).mockResolvedValue(true);
 
       const req = new Request('http://localhost/workspaces/123/documents', {
         method: 'POST',
@@ -146,7 +152,7 @@ describe('DynamicRouter', () => {
         const match = router.findMatch('GET', '/workspaces/123/documents/456');
         expect(match).toBeDefined();
         
-        (mockAuthzService.check as Mock).mockResolvedValue(false);
+        (mockAuthzService.check as unknown as MockFn).mockResolvedValue(false);
   
         const req = new Request('http://localhost/workspaces/123/documents/456', {
           headers: {
@@ -200,7 +206,7 @@ describe('DynamicRouter', () => {
         };
         const match = { route: globalRoute, params: {} };
         
-        (mockAuthzService.check as Mock).mockResolvedValue(true);
+        (mockAuthzService.check as unknown as MockFn).mockResolvedValue(true);
 
         const req = new Request('http://localhost/admin/settings', {
             method: 'POST',
@@ -212,7 +218,7 @@ describe('DynamicRouter', () => {
         expect(result).toBe(true);
         // Expect workspaceId to be null (or undefined depending on implementation, let's say null/undefined)
         // Checking call arguments
-        const calls = (mockAuthzService.check as Mock).mock.calls;
+        const calls = (mockAuthzService.check as unknown as MockFn).mock.calls;
         expect(calls.length).toBeGreaterThan(0);
         const args = calls[0];
         expect(args).toBeDefined();
@@ -240,7 +246,7 @@ describe('DynamicRouter', () => {
             body: JSON.stringify({ title: 'New Doc' })
         });
 
-        (global.fetch as unknown as Mock).mockResolvedValue(new Response('{"id":"doc-1"}', { status: 201 }));
+        (global.fetch as unknown as MockFn).mockResolvedValue(new Response('{"id":"doc-1"}', { status: 201 }));
 
         const response = await router.proxyRequest(match, req, {});
         
@@ -253,7 +259,7 @@ describe('DynamicRouter', () => {
             })
         );
 
-        const callArgs = (global.fetch as unknown as Mock).mock.calls[0];
+        const callArgs = (global.fetch as unknown as MockFn).mock.calls[0];
         if (!callArgs) throw new Error('Fetch not called');
         
         const sentBody = JSON.parse(callArgs[1].body);
@@ -293,11 +299,11 @@ describe('DynamicRouter', () => {
             }
         });
 
-        (global.fetch as unknown as Mock).mockResolvedValue(new Response('{"id":"456"}', { status: 200 }));
+        (global.fetch as unknown as MockFn).mockResolvedValue(new Response('{"id":"456"}', { status: 200 }));
 
         await router.proxyRequest(match, req, { version: 'v1' });
         
-         const callArgs = (global.fetch as unknown as Mock).mock.calls[0];
+         const callArgs = (global.fetch as unknown as MockFn).mock.calls[0];
          if (!callArgs) throw new Error('Fetch not called');
          const sentBody = JSON.parse(callArgs[1].body);
          
@@ -325,7 +331,7 @@ describe('DynamicRouter', () => {
         const match = { route: route!, params: { workspaceId: '123' } };
         const req = new Request('http://localhost/workspaces/123/documents', { method: 'POST' });
 
-        (global.fetch as unknown as Mock).mockRejectedValue(new Error('Network error'));
+        (global.fetch as unknown as MockFn).mockRejectedValue(new Error('Network error'));
 
         const response = await router.proxyRequest(match, req, {});
         expect(response.status).toBe(502);
@@ -350,12 +356,12 @@ describe('DynamicRouter', () => {
             json: vi.fn().mockRejectedValue(new Error('Invalid JSON'))
         } as unknown as Request;
 
-        (global.fetch as unknown as Mock).mockResolvedValue(new Response('{}', { status: 200 }));
+        (global.fetch as unknown as MockFn).mockResolvedValue(new Response('{}', { status: 200 }));
 
         await router.proxyRequest(match, req, {});
         
         // Should proceed with empty body
-        const callArgs = (global.fetch as unknown as Mock).mock.calls[0];
+        const callArgs = (global.fetch as unknown as MockFn).mock.calls[0];
         if (!callArgs) throw new Error('Fetch not called');
         
         const sentBody = JSON.parse(callArgs[1].body);
@@ -371,7 +377,7 @@ describe('DynamicRouter', () => {
         });
 
         // Mock fetch to handle both calls
-        (global.fetch as unknown as Mock).mockImplementation(async (url) => {
+        (global.fetch as unknown as MockFn).mockImplementation(async (url) => {
             if (url.includes('doc-actions')) {
                 return new Response('{"id":"doc-1"}', { status: 201 });
             }
@@ -388,7 +394,7 @@ describe('DynamicRouter', () => {
 
         expect(global.fetch).toHaveBeenCalledTimes(2);
         
-        const telemetryCall = (global.fetch as unknown as Mock).mock.calls.find(call => (call[0] as string).includes('telemetry-actions'));
+        const telemetryCall = (global.fetch as unknown as MockFn).mock.calls.find(call => (call[0] as string).includes('telemetry-actions'));
         expect(telemetryCall).toBeDefined();
         
         const body = JSON.parse(telemetryCall![1].body);
@@ -408,7 +414,7 @@ describe('DynamicRouter', () => {
         const match = { route: route!, params: { workspaceId: '123' } };
         const req = new Request('http://localhost/workspaces/123/documents', { method: 'POST' });
 
-        (global.fetch as unknown as Mock).mockImplementation(async (url) => {
+        (global.fetch as unknown as MockFn).mockImplementation(async (url) => {
             if (url.includes('doc-actions')) {
                  // Downstream service internal error
                 return new Response('{"error":"oops"}', { status: 500 });
@@ -424,7 +430,7 @@ describe('DynamicRouter', () => {
 
         await new Promise(resolve => setTimeout(resolve, 0));
 
-        const telemetryCall = (global.fetch as unknown as Mock).mock.calls.find(call => (call[0] as string).includes('telemetry-actions'));
+        const telemetryCall = (global.fetch as unknown as MockFn).mock.calls.find(call => (call[0] as string).includes('telemetry-actions'));
         expect(telemetryCall).toBeDefined();
         const body = JSON.parse(telemetryCall![1].body);
         expect(body.payload.metadata.statusCode).toBe(500);
@@ -436,7 +442,7 @@ describe('DynamicRouter', () => {
         const req = new Request('http://localhost/workspaces/123/documents', { method: 'POST' });
         const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
-        (global.fetch as unknown as Mock).mockImplementation(async (url) => {
+        (global.fetch as unknown as MockFn).mockImplementation(async (url) => {
             if (url.includes('doc-actions')) {
                 return new Response('{"id":"doc-1"}', { status: 201 });
             }

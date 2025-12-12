@@ -1,5 +1,5 @@
 
-import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'bun:test';
 import { AuthzService } from './authzService';
 
 describe('AuthzService', () => {
@@ -15,7 +15,7 @@ describe('AuthzService', () => {
   });
 
   it('should return true if authz service allows', async () => {
-    const fetchMock = global.fetch as unknown as Mock;
+    const fetchMock = global.fetch as unknown as ReturnType<typeof vi.fn>;
     fetchMock.mockResolvedValue({
       ok: true,
       json: async () => ({ allowed: true }),
@@ -30,7 +30,7 @@ describe('AuthzService', () => {
   });
 
   it('should return false if authz service denies (allowed: false)', async () => {
-    const fetchMock = global.fetch as unknown as Mock;
+    const fetchMock = global.fetch as unknown as ReturnType<typeof vi.fn>;
     fetchMock.mockResolvedValue({
       ok: true,
       json: async () => ({ allowed: false }),
@@ -41,7 +41,7 @@ describe('AuthzService', () => {
   });
 
   it('should return false if authz service returns non-200 status', async () => {
-    const fetchMock = global.fetch as unknown as Mock;
+    const fetchMock = global.fetch as unknown as ReturnType<typeof vi.fn>;
     fetchMock.mockResolvedValue({
       ok: false,
       status: 500
@@ -52,7 +52,7 @@ describe('AuthzService', () => {
   });
 
   it('should return false if fetch fails (network error)', async () => {
-    const fetchMock = global.fetch as unknown as Mock;
+    const fetchMock = global.fetch as unknown as ReturnType<typeof vi.fn>;
     fetchMock.mockRejectedValue(new Error('Network error'));
 
     const result = await service.check('user-1', 'ws-1', 'action:create');

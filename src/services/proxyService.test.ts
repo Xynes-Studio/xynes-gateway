@@ -1,5 +1,5 @@
 
-import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'bun:test';
 import { ProxyService } from './proxyService';
 import type { RouteMatch } from '../types';
 
@@ -39,7 +39,7 @@ describe('ProxyService', () => {
             headers: { 'Content-Type': 'application/json' }
         });
 
-        const fetchMock = global.fetch as unknown as Mock;
+        const fetchMock = global.fetch as unknown as ReturnType<typeof vi.fn>;
         fetchMock.mockResolvedValue(new Response('{"id":"doc-1"}', { status: 201 }));
 
         const response = await proxyService.proxyRequest(mockRequest, routeMatch);
@@ -69,7 +69,7 @@ describe('ProxyService', () => {
         };
 
         const mockRequest = new Request('http://localhost:3000/workspaces/123/documents/456');
-        const fetchMock = global.fetch as unknown as Mock;
+        const fetchMock = global.fetch as unknown as ReturnType<typeof vi.fn>;
         fetchMock.mockResolvedValue(new Response('ok', { status: 200 }));
 
         await proxyService.proxyRequest(mockRequest, routeMatch);

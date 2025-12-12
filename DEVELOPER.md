@@ -21,7 +21,7 @@ The gateway is built using Bun and Hono. It acts as the entry point for all Xyne
 ### Global Standards
 
 - **Folder Structure**: Feature-based separation in `src/`.
-- **Testing**: TDD is mandatory. 75%+ coverage required. Use `vitest`.
+- **Testing**: TDD is mandatory. 75%+ coverage required. Use `bun test`.
 - **Linting**: Keep code clean.
 
 ### Environment
