@@ -1,4 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+
+vi.mock('../infra/db', () => ({
+    pingDb: vi.fn(),
+}));
+
+import { pingDb } from '../infra/db';
 import { createApp } from '../app';
 
 describe('Gateway Integration', () => {
@@ -21,7 +27,26 @@ describe('Gateway Integration', () => {
         const res = await app.request('/health');
         expect(res.status).toBe(200);
         const body = await res.json();
-        expect(body).toEqual({ status: 'ok' });
+        expect(body).toEqual({ status: 'ok', service: 'xynes-gateway' });
+    });
+
+    it('GET /ready returns 200 when DB is reachable', async () => {
+        (pingDb as unknown as { mockResolvedValueOnce: (v: unknown) => void }).mockResolvedValueOnce(undefined);
+        const app = await createApp();
+        const res = await app.request('/ready');
+        expect(res.status).toBe(200);
+        const body = await res.json();
+        expect(body).toEqual({ status: 'ready' });
+    });
+
+    it('GET /ready returns 503 when DB is unreachable', async () => {
+        (pingDb as unknown as { mockRejectedValueOnce: (e: unknown) => void }).mockRejectedValueOnce(new Error('db down'));
+        const app = await createApp();
+        const res = await app.request('/ready');
+        expect(res.status).toBe(503);
+        const body = await res.json() as { status: string; error?: string };
+        expect(body.status).toBe('not_ready');
+        expect(body.error).toContain('db down');
     });
 
     it('should proxy POST /workspaces/:id/documents to DOC_SERVICE', async () => {

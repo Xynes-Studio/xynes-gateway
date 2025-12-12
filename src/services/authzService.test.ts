@@ -1,5 +1,5 @@
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from 'vitest';
 import { AuthzService } from './authzService';
 
 describe('AuthzService', () => {
@@ -15,7 +15,8 @@ describe('AuthzService', () => {
   });
 
   it('should return true if authz service allows', async () => {
-    (global.fetch as any).mockResolvedValue({
+    const fetchMock = global.fetch as unknown as Mock;
+    fetchMock.mockResolvedValue({
       ok: true,
       json: async () => ({ allowed: true }),
     });
@@ -29,7 +30,8 @@ describe('AuthzService', () => {
   });
 
   it('should return false if authz service denies (allowed: false)', async () => {
-    (global.fetch as any).mockResolvedValue({
+    const fetchMock = global.fetch as unknown as Mock;
+    fetchMock.mockResolvedValue({
       ok: true,
       json: async () => ({ allowed: false }),
     });
@@ -39,7 +41,8 @@ describe('AuthzService', () => {
   });
 
   it('should return false if authz service returns non-200 status', async () => {
-    (global.fetch as any).mockResolvedValue({
+    const fetchMock = global.fetch as unknown as Mock;
+    fetchMock.mockResolvedValue({
       ok: false,
       status: 500
     });
@@ -49,7 +52,8 @@ describe('AuthzService', () => {
   });
 
   it('should return false if fetch fails (network error)', async () => {
-    (global.fetch as any).mockRejectedValue(new Error('Network error'));
+    const fetchMock = global.fetch as unknown as Mock;
+    fetchMock.mockRejectedValue(new Error('Network error'));
 
     const result = await service.check('user-1', 'ws-1', 'action:create');
     expect(result).toBe(false);

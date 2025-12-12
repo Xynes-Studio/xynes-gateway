@@ -7,6 +7,8 @@ import { DynamicRouter } from './router/dynamicRouter';
 import { InMemoryRouteRepository } from './data/routeRepository';
 import { AuthzService } from './services/authzService';
 import { config } from './infra/config';
+import { healthRoute } from './routes/health.route';
+import { readyRoute } from './routes/ready.route';
 import type { Route } from './types';
 
 export const createApp = async () => {
@@ -18,7 +20,8 @@ export const createApp = async () => {
   app.onError(errorHandler);
 
   // Routes
-  app.get('/health', (c) => c.json({ status: 'ok' }));
+  app.route('/', healthRoute);
+  app.route('/', readyRoute);
 
   // Dependencies
   const authzService = new AuthzService(config.services.authz);
