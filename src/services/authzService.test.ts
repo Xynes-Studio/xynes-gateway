@@ -44,6 +44,17 @@ describe('AuthzService', () => {
     expect(result).toBe(false);
   });
 
+  it('should support envelope response from authz service', async () => {
+    const fetchMock = global.fetch as unknown as ReturnType<typeof vi.fn>;
+    fetchMock.mockResolvedValue({
+      ok: true,
+      json: async () => ({ ok: true, data: { allowed: true } }),
+    });
+
+    const result = await service.check('user-1', 'ws-1', 'action:read');
+    expect(result).toBe(true);
+  });
+
   it('should return false if authz service returns non-200 status', async () => {
     const fetchMock = global.fetch as unknown as ReturnType<typeof vi.fn>;
     fetchMock.mockResolvedValue({

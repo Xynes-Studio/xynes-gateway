@@ -71,12 +71,17 @@ Currently, routes are seeded in-memory in `src/app.ts`. Future updates will fetc
 
 The Dynamic Router implements a "Smart Proxy" pattern:
 1. **Matching**: Matches incoming `method` + `path` to a `Route`.
-2. **Authorization**: Checks `X-XS-User-Id` against RBAC (Authz Service).
+2. **Authentication & Authorization**: Validates `Authorization: Bearer <JWT>` to derive `userId`, then calls Authz Service for non-public routes.
 3. **Action Mapping**: Maps matched route to a downstream "Action" endpoint.
    - `doc-service` -> `${DOC_SERVICE_URL}/internal/doc-actions`
    - `cms-core` -> `${CMS_CORE_URL}/internal/cms-actions`
 4. **Payload Construction**: Builds a single JSON payload object by merging request JSON body + query + path params (path params win; `workspaceId` is header-only).
 5. **Telemetry**: Asynchronously records request tracking.
+
+### Internal Header Ownership (SEC-HEADER-1)
+
+- `X-XS-User-Id`, `X-Workspace-Id`, and `X-Internal-Service-Token` are **internal-only** headers set by the gateway.
+- Any client-sent `X-XS-*`, `X-Internal-*`, `X-Workspace-Id`, or `X-Internal-Service-Token` values are ignored/overwritten and never forwarded to internal services.
 
 ### Public Routes (GATE-6)
 
@@ -131,3 +136,8 @@ Ensure the following environment variables are set:
 - `CMS_CORE_URL`: URL of the CMS Core Service (default: `http://localhost:3003`)
 - `AUTHZ_SERVICE_URL`: URL of the Authorization Service (default: `http://localhost:3002`)
 - `INTERNAL_SERVICE_TOKEN`: Shared secret for internal service calls (sent as `X-Internal-Service-Token`)
+- `JWT_SECRET`: HS256 JWT secret used to validate `Authorization: Bearer <JWT>` and derive `X-XS-User-Id` for protected routes
+- `JWT_ISSUER`: Optional expected `iss` claim (when set, tokens must match)
+- `JWT_AUDIENCE`: Optional expected `aud` claim (when set, tokens must match)
+- `JWT_PUBLIC_KEY`: Optional PEM public key for RS256 validation (alternative to `JWT_JWKS_URL`)
+- `JWT_JWKS_URL`: Optional JWKS URL for RS256 validation

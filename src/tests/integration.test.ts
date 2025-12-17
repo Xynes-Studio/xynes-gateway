@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'bun:test';
+import { signHs256ForTest } from "../testUtils/jwtTestUtils";
 
 const pingDbMock = vi.fn();
 vi.module('../infra/db', () => ({
@@ -8,6 +9,9 @@ vi.module('../infra/db', () => ({
 vi.module('../infra/config', () => ({
   config: {
     internalServiceToken: 'test-internal-token',
+    auth: {
+      jwtSecret: 'test-jwt-secret',
+    },
     services: {
       docs: 'http://localhost:3001',
       cms: 'http://localhost:3003',
@@ -67,6 +71,7 @@ describe('Gateway Integration', () => {
 
     it('should proxy POST /workspaces/:id/documents to doc-service', async () => {
         const app = await createApp();
+        const token = signHs256ForTest({ sub: "user-1", exp: 2_000_000_000 }, "test-jwt-secret");
         
         // Mock fetch to handle both Authz and Downstream
         // Mock fetch to handle both Authz and Downstream
@@ -75,11 +80,16 @@ describe('Gateway Integration', () => {
             if (urlStr.includes('/authz/check')) {
                 const headers = new Headers(init?.headers);
                 expect(headers.get('X-Internal-Service-Token')).toBe('test-internal-token');
-                return Promise.resolve(new Response(JSON.stringify({ allowed: true }), { status: 200 }));
+                const body = JSON.parse(String(init?.body || '{}')) as { userId?: string; workspaceId?: string; actionKey?: string };
+                expect(body.userId).toBe("user-1");
+                expect(body.workspaceId).toBe("workspace-1");
+                return Promise.resolve(new Response(JSON.stringify({ ok: true, data: { allowed: true } }), { status: 200 }));
             }
             if (urlStr.includes('/internal/doc-actions')) { // Updated to match new DynamicRouter logic
                  const headers = new Headers(init?.headers);
                  expect(headers.get('X-Internal-Service-Token')).toBe('test-internal-token');
+                 expect(headers.get('X-Workspace-Id')).toBe('workspace-1');
+                 expect(headers.get('X-XS-User-Id')).toBe('user-1');
                  return Promise.resolve(new Response(JSON.stringify({ id: 'doc-1', title: 'Test Doc' }), {
                     status: 200,
                     headers: { 'Content-Type': 'application/json' }
@@ -96,7 +106,10 @@ describe('Gateway Integration', () => {
             body: JSON.stringify({ title: 'Test Doc' }),
             headers: { 
                 'Content-Type': 'application/json',
-                'X-XS-User-Id': 'user-1'
+                Authorization: `Bearer ${token}`,
+                'X-XS-User-Id': 'attacker',
+                'X-Workspace-Id': 'attacker-workspace',
+                'X-Internal-Service-Token': 'attacker-token',
             }
         });
 
@@ -127,7 +140,7 @@ describe('Gateway Integration', () => {
                 const headers = new Headers(init?.headers);
                 expect(headers.get('X-Internal-Service-Token')).toBe('test-internal-token');
                 expect(headers.get('X-Workspace-Id')).toBe('workspace-1');
-                expect(headers.get('X-XS-User-Id')).toBe('user-1');
+                expect(headers.get('X-XS-User-Id')).toBeNull();
 
                 const body = JSON.parse(String(init?.body || '{}')) as { actionKey?: string; payload?: Record<string, unknown> };
                 expect(body.actionKey).toBe('cms.content.listPublished');
@@ -144,7 +157,9 @@ describe('Gateway Integration', () => {
         const res = await app.request('/workspaces/workspace-1/content/blog', {
             method: 'GET',
             headers: {
-                'X-XS-User-Id': 'user-1',
+                'X-XS-User-Id': 'attacker',
+                'X-Workspace-Id': 'attacker-workspace',
+                'X-Internal-Service-Token': 'attacker-token',
             },
         });
 
@@ -271,7 +286,7 @@ describe('Gateway Integration', () => {
         const res = await app.request('/workspaces/123/documents', {
             method: 'POST',
             headers: {
-                'X-XS-User-Id': 'user-1'
+                'X-XS-User-Id': 'attacker'
             }
         });
         
@@ -286,6 +301,6 @@ describe('Gateway Integration', () => {
         // expecting either 403 (service down/denied) or 200 (allowed). 
         // BUT dynamicRouter.handle currently returns 200 matched or 404 or 403.
         
-        expect([200, 403, 500]).toContain(res.status);
+        expect([200, 401, 403, 500]).toContain(res.status);
     });
 });

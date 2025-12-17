@@ -1,12 +1,17 @@
 import { describe, it, expect, beforeAll, afterAll, vi } from "bun:test";
 import { Hono } from "hono";
 import type { Context } from "hono";
+import { signHs256ForTest } from "../testUtils/jwtTestUtils";
 
 const token = "stack-test-token";
+const jwtSecret = "stack-jwt-secret";
 
 vi.module("../infra/config", () => ({
   config: {
     internalServiceToken: token,
+    auth: {
+      jwtSecret,
+    },
     services: {
       docs: "http://doc.local",
       cms: "http://cms.local",
@@ -49,7 +54,7 @@ describe("SEC-INT-1 internal auth (stack)", () => {
     authzApp.post("/authz/check", async (c) => {
       const denied = requireToken(c);
       if (denied) return denied;
-      return c.json({ allowed: true }, 200);
+      return c.json({ ok: true, data: { allowed: true } }, 200);
     });
 
     docApp = new Hono();
@@ -61,7 +66,15 @@ describe("SEC-INT-1 internal auth (stack)", () => {
         typeof raw === "object" && raw !== null && "actionKey" in raw
           ? String((raw as { actionKey: unknown }).actionKey)
           : undefined;
-      return c.json({ id: "doc-1", echoedActionKey }, 200);
+      return c.json(
+        {
+          id: "doc-1",
+          echoedActionKey,
+          echoedUserId: c.req.header("X-XS-User-Id"),
+          echoedWorkspaceId: c.req.header("X-Workspace-Id"),
+        },
+        200,
+      );
     });
 
     cmsApp = new Hono();
@@ -105,20 +118,29 @@ describe("SEC-INT-1 internal auth (stack)", () => {
     }) as unknown as typeof fetch;
 
     const app = await createApp();
+    const authToken = signHs256ForTest({ sub: "user-1", exp: 2_000_000_000 }, jwtSecret);
 
     const res = await app.request("/workspaces/ws-1/documents", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "X-XS-User-Id": "user-1",
+        Authorization: `Bearer ${authToken}`,
+        "X-XS-User-Id": "attacker",
+        "X-Workspace-Id": "attacker-workspace",
+        "X-Internal-Service-Token": "attacker-token",
       },
       body: JSON.stringify({ title: "hello" }),
     });
 
     expect(res.status).toBe(200);
-    const body = (await res.json()) as { ok: boolean; data: { id: string } };
+    const body = (await res.json()) as {
+      ok: boolean;
+      data: { id: string; echoedUserId?: string | null; echoedWorkspaceId?: string | null };
+    };
     expect(body.ok).toBe(true);
     expect(body.data).toEqual(expect.objectContaining({ id: "doc-1" }));
+    expect(body.data.echoedUserId).toBe("user-1");
+    expect(body.data.echoedWorkspaceId).toBe("ws-1");
 
     await new Promise((r) => setTimeout(r, 0));
     expect(telemetryCalls).toBeGreaterThan(0);
