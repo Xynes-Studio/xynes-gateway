@@ -3,9 +3,11 @@ import type { RouteMatch } from '../types';
 
 export class ProxyService {
   private serviceMap: Record<string, string>;
+  private internalServiceToken?: string;
 
-  constructor(serviceMap: Record<string, string>) {
+  constructor(serviceMap: Record<string, string>, internalServiceToken?: string) {
     this.serviceMap = serviceMap;
+    this.internalServiceToken = internalServiceToken;
   }
 
   async proxyRequest(request: Request, match: RouteMatch): Promise<Response> {
@@ -25,6 +27,10 @@ export class ProxyService {
     const targetUrl = new URL(finalPath, baseUrl).toString();
 
     const headers = new Headers(request.headers);
+    headers.delete('X-Internal-Service-Token');
+    if (this.internalServiceToken) {
+      headers.set('X-Internal-Service-Token', this.internalServiceToken);
+    }
     if (route.workspaceScoped && params.workspaceId) {
       headers.set('X-Workspace-Id', params.workspaceId);
     }

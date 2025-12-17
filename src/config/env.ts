@@ -4,6 +4,7 @@
 export const config = {
   port: Number(process.env.PORT) || 4100,
   databaseUrl: process.env.DATABASE_URL,
+  internalServiceToken: process.env.INTERNAL_SERVICE_TOKEN,
   services: {
     docs: process.env.DOC_SERVICE_URL!,
     cms: process.env.CMS_CORE_URL!,

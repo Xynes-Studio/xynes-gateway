@@ -24,7 +24,7 @@ export const createApp = async () => {
   app.route('/', readyRoute);
 
   // Dependencies
-  const authzService = new AuthzService(config.services.authz);
+  const authzService = new AuthzService(config.services.authz, config.internalServiceToken);
   
   // Initial Routes (Mock for now, will come from DB later)
   const initialRoutes: Route[] = [

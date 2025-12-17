@@ -6,7 +6,7 @@ describe('AuthzService', () => {
   let service: AuthzService;
 
   beforeEach(() => {
-    service = new AuthzService('http://mock-authz');
+    service = new AuthzService('http://mock-authz', 'test-internal-token');
     global.fetch = vi.fn() as unknown as typeof fetch;
   });
 
@@ -25,6 +25,10 @@ describe('AuthzService', () => {
     expect(result).toBe(true);
     expect(global.fetch).toHaveBeenCalledWith('http://mock-authz/authz/check', expect.objectContaining({
       method: 'POST',
+      headers: expect.objectContaining({
+        'Content-Type': 'application/json',
+        'X-Internal-Service-Token': 'test-internal-token',
+      }),
       body: JSON.stringify({ userId: 'user-1', workspaceId: 'ws-1', actionKey: 'action:read' })
     }));
   });

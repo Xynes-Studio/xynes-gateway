@@ -6,6 +6,7 @@ type MockFn = ReturnType<typeof vi.fn>;
 
 vi.module('../infra/config', () => ({
   config: {
+    internalServiceToken: 'test-internal-token',
     services: {
       docs: 'http://localhost:3001',
       cms: 'http://localhost:3003',
@@ -276,6 +277,7 @@ describe('DynamicRouter', () => {
         const headers = callArgs[1].headers as Headers;
         expect(headers.get('X-XS-User-Id')).toBe('user-1');
         expect(headers.get('X-Workspace-Id')).toBe('123');
+        expect(headers.get('X-Internal-Service-Token')).toBe('test-internal-token');
         
         expect(response.status).toBe(201);
         const resBody = await response.json();
@@ -397,6 +399,9 @@ describe('DynamicRouter', () => {
         const telemetryCall = (global.fetch as unknown as MockFn).mock.calls.find(call => (call[0] as string).includes('telemetry-actions'));
         expect(telemetryCall).toBeDefined();
         
+        const telemetryHeaders = telemetryCall![1].headers as Headers;
+        expect(telemetryHeaders.get('X-Internal-Service-Token')).toBe('test-internal-token');
+
         const body = JSON.parse(telemetryCall![1].body);
         expect(body.actionKey).toBe('telemetry.event.ingest');
         expect(body.payload.source).toBe('gateway');

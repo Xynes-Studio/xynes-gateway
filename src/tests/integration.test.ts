@@ -5,6 +5,18 @@ vi.module('../infra/db', () => ({
   pingDb: pingDbMock,
 }));
 
+vi.module('../infra/config', () => ({
+  config: {
+    internalServiceToken: 'test-internal-token',
+    services: {
+      docs: 'http://localhost:3001',
+      cms: 'http://localhost:3003',
+      authz: 'http://localhost:3002',
+      telemetry: 'http://localhost:3004',
+    },
+  },
+}));
+
 const { createApp } = await import('../app');
 
 describe('Gateway Integration', () => {
@@ -58,12 +70,16 @@ describe('Gateway Integration', () => {
         
         // Mock fetch to handle both Authz and Downstream
         // Mock fetch to handle both Authz and Downstream
-        global.fetch = vi.fn((url: string | URL | Request, _init?: RequestInit) => {
+        global.fetch = vi.fn((url: string | URL | Request, init?: RequestInit) => {
             const urlStr = url.toString();
             if (urlStr.includes('/authz/check')) {
+                const headers = new Headers(init?.headers);
+                expect(headers.get('X-Internal-Service-Token')).toBe('test-internal-token');
                 return Promise.resolve(new Response(JSON.stringify({ allowed: true }), { status: 200 }));
             }
             if (urlStr.includes('/internal/doc-actions')) { // Updated to match new DynamicRouter logic
+                 const headers = new Headers(init?.headers);
+                 expect(headers.get('X-Internal-Service-Token')).toBe('test-internal-token');
                  return Promise.resolve(new Response(JSON.stringify({ id: 'doc-1', title: 'Test Doc' }), {
                     status: 200,
                     headers: { 'Content-Type': 'application/json' }
