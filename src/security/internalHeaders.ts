@@ -16,6 +16,17 @@ const SAFE_FORWARDED_HEADERS_ALLOWLIST = new Set<string>([
   "baggage",
 ]);
 
+export function sanitizeInternalHeaderValue(value: string): string {
+  // Strip HTTP control characters to prevent header splitting/injection.
+  let out = "";
+  for (let i = 0; i < value.length; i += 1) {
+    const code = value.charCodeAt(i);
+    if (code <= 0x1f || code === 0x7f) continue;
+    out += value[i] ?? "";
+  }
+  return out;
+}
+
 export function isClientInternalHeader(name: string): boolean {
   const lower = name.toLowerCase();
   if (INTERNAL_HEADER_DENYLIST.has(lower)) return true;
@@ -45,12 +56,16 @@ export function buildInternalHeaders(
 
   headers.set("Content-Type", "application/json");
 
-  if (ctx.requestId) headers.set("X-Request-Id", ctx.requestId);
+  if (ctx.requestId)
+    headers.set("X-Request-Id", sanitizeInternalHeaderValue(ctx.requestId));
   if (ctx.internalServiceToken)
-    headers.set("X-Internal-Service-Token", ctx.internalServiceToken);
-  if (ctx.workspaceId) headers.set("X-Workspace-Id", ctx.workspaceId);
-  if (ctx.userId) headers.set("X-XS-User-Id", ctx.userId);
+    headers.set(
+      "X-Internal-Service-Token",
+      sanitizeInternalHeaderValue(ctx.internalServiceToken),
+    );
+  if (ctx.workspaceId)
+    headers.set("X-Workspace-Id", sanitizeInternalHeaderValue(ctx.workspaceId));
+  headers.set("X-XS-User-Id", sanitizeInternalHeaderValue(ctx.userId ?? ""));
 
   return headers;
 }
-

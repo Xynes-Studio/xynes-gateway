@@ -1,6 +1,6 @@
 
 import type { RouteMatch } from '../types';
-import { isClientInternalHeader } from '../security/internalHeaders';
+import { isClientInternalHeader, sanitizeInternalHeaderValue } from '../security/internalHeaders';
 
 export class ProxyService {
   private serviceMap: Record<string, string>;
@@ -11,7 +11,11 @@ export class ProxyService {
     this.internalServiceToken = internalServiceToken;
   }
 
-  async proxyRequest(request: Request, match: RouteMatch): Promise<Response> {
+  async proxyRequest(
+    request: Request,
+    match: RouteMatch,
+    ctx: { userId?: string | null } = {},
+  ): Promise<Response> {
     const { route, params } = match;
     const baseUrl = this.serviceMap[route.serviceKey];
 
@@ -36,11 +40,15 @@ export class ProxyService {
       }
     }
 
+    headers.set("X-XS-User-Id", sanitizeInternalHeaderValue(ctx.userId ?? ""));
     if (this.internalServiceToken) {
-      headers.set('X-Internal-Service-Token', this.internalServiceToken);
+      headers.set(
+        "X-Internal-Service-Token",
+        sanitizeInternalHeaderValue(this.internalServiceToken),
+      );
     }
     if (route.workspaceScoped && params.workspaceId) {
-      headers.set('X-Workspace-Id', params.workspaceId);
+      headers.set("X-Workspace-Id", sanitizeInternalHeaderValue(params.workspaceId));
     }
 
     // Remove host header to avoid conflicts
