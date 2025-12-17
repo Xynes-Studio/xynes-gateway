@@ -111,6 +111,68 @@ describe('ProxyService', () => {
         expect(init.headers.get('X-Internal-Service-Token')).toBe(internalServiceToken);
     });
 
+    it('should strip spoofed X-XS-User-Id and send empty user id by default', async () => {
+        const routeMatch: RouteMatch = {
+            route: {
+                id: '5',
+                pathPattern: '/workspaces/:workspaceId/documents',
+                method: 'POST',
+                serviceKey: 'DOC_SERVICE',
+                targetPath: '/documents',
+                workspaceScoped: true,
+            },
+            params: { workspaceId: '123' }
+        };
+
+        const mockRequest = new Request('http://localhost:3000/workspaces/123/documents', {
+            method: 'POST',
+            body: JSON.stringify({ title: 'New Doc' }),
+            headers: {
+                'Content-Type': 'application/json',
+                'X-XS-User-Id': 'attacker',
+            }
+        });
+
+        const fetchMock = global.fetch as unknown as ReturnType<typeof vi.fn>;
+        fetchMock.mockResolvedValue(new Response('ok', { status: 200 }));
+
+        await proxyService.proxyRequest(mockRequest, routeMatch);
+
+        const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+        expect(init.headers.get('X-XS-User-Id')).toBe('');
+    });
+
+    it('should send provided user id when given', async () => {
+        const routeMatch: RouteMatch = {
+            route: {
+                id: '6',
+                pathPattern: '/workspaces/:workspaceId/documents',
+                method: 'POST',
+                serviceKey: 'DOC_SERVICE',
+                targetPath: '/documents',
+                workspaceScoped: true,
+            },
+            params: { workspaceId: '123' }
+        };
+
+        const mockRequest = new Request('http://localhost:3000/workspaces/123/documents', {
+            method: 'POST',
+            body: JSON.stringify({ title: 'New Doc' }),
+            headers: {
+                'Content-Type': 'application/json',
+                'X-XS-User-Id': 'attacker',
+            }
+        });
+
+        const fetchMock = global.fetch as unknown as ReturnType<typeof vi.fn>;
+        fetchMock.mockResolvedValue(new Response('ok', { status: 200 }));
+
+        await proxyService.proxyRequest(mockRequest, routeMatch, { userId: 'user-1' });
+
+        const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+        expect(init.headers.get('X-XS-User-Id')).toBe('user-1');
+    });
+
     it('should throw if service URL not configured', async () => {
          const routeMatch: RouteMatch = {
             route: {

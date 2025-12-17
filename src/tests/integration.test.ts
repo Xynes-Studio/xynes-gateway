@@ -140,7 +140,7 @@ describe('Gateway Integration', () => {
                 const headers = new Headers(init?.headers);
                 expect(headers.get('X-Internal-Service-Token')).toBe('test-internal-token');
                 expect(headers.get('X-Workspace-Id')).toBe('workspace-1');
-                expect(headers.get('X-XS-User-Id')).toBeNull();
+                expect(headers.get('X-XS-User-Id')).toBe('');
 
                 const body = JSON.parse(String(init?.body || '{}')) as { actionKey?: string; payload?: Record<string, unknown> };
                 expect(body.actionKey).toBe('cms.content.listPublished');

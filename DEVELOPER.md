@@ -24,6 +24,14 @@ The gateway is built using Bun and Hono. It acts as the entry point for all Xyne
 - **Testing**: TDD is mandatory. 80%+ coverage required. Use `bun test --coverage`.
 - **Linting**: Keep code clean.
 
+### Testing Strategy (ADR-aligned)
+
+We follow the platform test pyramid described in `../xynes-cms-core/docs/adr/001-testing-strategy.md`, adapted for the gateway:
+
+- **Unit tests**: colocated `*.test.ts` next to modules in `src/**` (no real network/DB).
+- **Integration tests**: `src/tests/integration.test.ts` validates gateway routing and header ownership with mocked downstreams.
+- **Stack tests**: `src/tests/internal-auth.stack.test.ts` runs an in-process downstream stack to validate internal-token enforcement and header injection end-to-end.
+
 ### Environment
 
 - Scripts load `.env.dev` by default (Docker/dev). Override for host runs:
@@ -82,6 +90,7 @@ The Dynamic Router implements a "Smart Proxy" pattern:
 
 - `X-XS-User-Id`, `X-Workspace-Id`, and `X-Internal-Service-Token` are **internal-only** headers set by the gateway.
 - Any client-sent `X-XS-*`, `X-Internal-*`, `X-Workspace-Id`, or `X-Internal-Service-Token` values are ignored/overwritten and never forwarded to internal services.
+- The gateway always sends `X-XS-User-Id` to internal services; for anonymous/public requests it is an empty string.
 
 ### Public Routes (GATE-6)
 
