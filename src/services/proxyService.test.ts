@@ -5,13 +5,14 @@ import type { RouteMatch } from '../types';
 
 describe('ProxyService', () => {
     let proxyService: ProxyService;
+    const internalServiceToken = 'test-internal-token';
     const serviceMap = {
         'DOC_SERVICE': 'http://localhost:3001',
         'ANALYTICS_SERVICE': 'http://localhost:3002'
     };
 
     beforeEach(() => {
-        proxyService = new ProxyService(serviceMap);
+        proxyService = new ProxyService(serviceMap, internalServiceToken);
         // mock global fetch
         global.fetch = vi.fn() as unknown as typeof fetch;
     });
@@ -51,6 +52,7 @@ describe('ProxyService', () => {
         expect(init.method).toBe('POST');
         expect(init.headers.get('X-Workspace-Id')).toBe('123');
         expect(init.headers.get('Content-Type')).toBe('application/json');
+        expect(init.headers.get('X-Internal-Service-Token')).toBe(internalServiceToken);
         
         expect(response.status).toBe(201);
     });
@@ -76,6 +78,37 @@ describe('ProxyService', () => {
 
         const [url] = fetchMock.mock.calls[0] as [string];
         expect(url).toBe('http://localhost:3001/documents/456');
+    });
+
+    it('should override client-provided X-Internal-Service-Token', async () => {
+        const routeMatch: RouteMatch = {
+            route: {
+                id: '4',
+                pathPattern: '/workspaces/:workspaceId/documents',
+                method: 'POST',
+                serviceKey: 'DOC_SERVICE',
+                targetPath: '/documents',
+                workspaceScoped: true,
+            },
+            params: { workspaceId: '123' }
+        };
+
+        const mockRequest = new Request('http://localhost:3000/workspaces/123/documents', {
+            method: 'POST',
+            body: JSON.stringify({ title: 'New Doc' }),
+            headers: {
+                'Content-Type': 'application/json',
+                'X-Internal-Service-Token': 'attacker-token',
+            }
+        });
+
+        const fetchMock = global.fetch as unknown as ReturnType<typeof vi.fn>;
+        fetchMock.mockResolvedValue(new Response('ok', { status: 200 }));
+
+        await proxyService.proxyRequest(mockRequest, routeMatch);
+
+        const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+        expect(init.headers.get('X-Internal-Service-Token')).toBe(internalServiceToken);
     });
 
     it('should throw if service URL not configured', async () => {

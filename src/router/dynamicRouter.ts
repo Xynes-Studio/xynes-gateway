@@ -176,6 +176,10 @@ export class DynamicRouter {
     // Forward Headers
     const headers = new Headers();
     headers.set('Content-Type', 'application/json');
+
+    if (config.internalServiceToken) {
+        headers.set('X-Internal-Service-Token', config.internalServiceToken);
+    }
     
     const userId = request.headers.get('X-XS-User-Id');
     if (userId) {

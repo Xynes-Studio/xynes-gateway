@@ -112,3 +112,4 @@ Ensure the following environment variables are set:
 - `DOC_SERVICE_URL`: URL of the Document Service (default: `http://localhost:3001`)
 - `CMS_CORE_URL`: URL of the CMS Core Service (default: `http://localhost:3003`)
 - `AUTHZ_SERVICE_URL`: URL of the Authorization Service (default: `http://localhost:3002`)
+- `INTERNAL_SERVICE_TOKEN`: Shared secret for internal service calls (sent as `X-Internal-Service-Token`)

@@ -44,6 +44,7 @@ export class TelemetryService implements ITelemetryService {
         try {
             const headers = new Headers();
             headers.set('Content-Type', 'application/json');
+            if (config.internalServiceToken) headers.set('X-Internal-Service-Token', config.internalServiceToken);
             if (metadata.userId) headers.set('X-XS-User-Id', metadata.userId);
             if (metadata.workspaceId) headers.set('X-Workspace-Id', metadata.workspaceId);
 
