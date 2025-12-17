@@ -1,4 +1,5 @@
 import { createHmac, timingSafeEqual, createPublicKey, verify } from "node:crypto";
+import { validateJwksUrlForFetch } from "../security/jwksUrl";
 
 function base64UrlToBase64(input: string): string {
   const normalized = input.replace(/-/g, "+").replace(/_/g, "/");
@@ -31,11 +32,34 @@ export type JwtClaims = Record<string, unknown> & {
 export interface JwtVerificationOptions {
   nowEpochSeconds?: number;
   jwksTimeoutMs?: number;
+  jwksTtlMs?: number;
 }
 
 export interface JwtRequirements {
   issuer?: string;
   audience?: string;
+}
+
+function satisfiesJwtRequirements(payload: JwtClaims, requirements?: JwtRequirements): boolean {
+  if (!requirements) return true;
+
+  if (requirements.issuer) {
+    if (payload.iss !== requirements.issuer) return false;
+  }
+
+  if (requirements.audience) {
+    const aud = payload.aud;
+    const required = requirements.audience;
+    const matches =
+      typeof aud === "string"
+        ? aud === required
+        : Array.isArray(aud)
+          ? aud.some((v) => typeof v === "string" && v === required)
+          : false;
+    if (!matches) return false;
+  }
+
+  return true;
 }
 
 export function verifyHs256Jwt(
@@ -70,21 +94,7 @@ export function verifyHs256Jwt(
   if (typeof payload.nbf === "number" && now < payload.nbf) return null;
   if (typeof payload.exp === "number" && now >= payload.exp) return null;
 
-  if (options.requirements?.issuer) {
-    if (payload.iss !== options.requirements.issuer) return null;
-  }
-
-  if (options.requirements?.audience) {
-    const aud = payload.aud;
-    const required = options.requirements.audience;
-    const matches =
-      typeof aud === "string"
-        ? aud === required
-        : Array.isArray(aud)
-          ? aud.some((v) => typeof v === "string" && v === required)
-          : false;
-    if (!matches) return null;
-  }
+  if (!satisfiesJwtRequirements(payload, options.requirements)) return null;
 
   return payload;
 }
@@ -110,6 +120,7 @@ export interface JwtVerifierConfig {
 }
 
 const jwksCache = new Map<string, { expiresAt: number; jwks: Jwks }>();
+const jwksInFlight = new Map<string, Promise<Jwks | null>>();
 const DEFAULT_JWKS_TTL_MS = 5 * 60 * 1000;
 const DEFAULT_JWKS_TIMEOUT_MS = 3_000;
 
@@ -119,7 +130,12 @@ function base64UrlToBuffer(input: string): Buffer {
 
 function resolveJwtPublicKeyFromJwks(jwks: Jwks, kid?: string): ReturnType<typeof createPublicKey> | null {
   const keys = Array.isArray(jwks.keys) ? jwks.keys : [];
-  const candidates = kid ? keys.filter((k) => k.kid === kid) : keys;
+  const candidates = (kid ? keys.filter((k) => k.kid === kid) : keys).filter((k) => {
+    if (k.kty !== "RSA") return false;
+    if (typeof k.use === "string" && k.use !== "sig") return false;
+    if (typeof k.alg === "string" && k.alg !== "RS256") return false;
+    return true;
+  });
   const key = candidates.length === 1 ? candidates[0] : candidates.find((k) => k.use === "sig") ?? candidates[0];
   if (!key) return null;
   try {
@@ -133,38 +149,93 @@ async function getJwks(
   jwksUrl: string,
   fetcher: typeof fetch,
   timeoutMs: number,
+  ttlMs: number,
 ): Promise<Jwks | null> {
+  const validation = validateJwksUrlForFetch(jwksUrl);
+  if (!validation.ok) return null;
+
+  const url = validation.url;
+  const cacheKey = url.toString();
+
   const now = Date.now();
-  const cached = jwksCache.get(jwksUrl);
+  const cached = jwksCache.get(cacheKey);
   if (cached && cached.expiresAt > now) return cached.jwks;
 
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const existing = jwksInFlight.get(cacheKey);
+  if (existing) return await existing;
 
-  try {
-    const res = await fetcher(jwksUrl, { method: "GET", signal: controller.signal });
-    if (!res.ok) return null;
-    const parsed = (await res.json().catch(() => null)) as unknown;
-    if (!parsed || typeof parsed !== "object") return null;
-    if (!("keys" in parsed) || !Array.isArray((parsed as { keys?: unknown }).keys))
-      return null;
+  let resolvePending: ((jwks: Jwks | null) => void) | null = null;
+  const pending = new Promise<Jwks | null>((resolve) => {
+    resolvePending = resolve;
+  });
+  jwksInFlight.set(cacheKey, pending);
+  void pending.finally(() => {
+    jwksInFlight.delete(cacheKey);
+  });
 
-    const jwks = parsed as Jwks;
-    jwksCache.set(jwksUrl, { jwks, expiresAt: now + DEFAULT_JWKS_TTL_MS });
-    return jwks;
-  } catch (err: unknown) {
-    if (
-      err &&
-      typeof err === "object" &&
-      "name" in err &&
-      (err as { name?: unknown }).name === "AbortError"
-    ) {
-      return null;
+  void (async (): Promise<void> => {
+    const controller = new AbortController();
+    let hardTimer: ReturnType<typeof setTimeout> | null = null;
+    try {
+      const fetchPromise = fetcher(url.toString(), {
+        method: "GET",
+        redirect: "manual",
+        signal: controller.signal,
+        headers: { Accept: "application/json" },
+      }).then(
+        (res) => ({ type: "res" as const, res }),
+        (err: unknown) => ({ type: "err" as const, err }),
+      );
+
+      const timeoutPromise = new Promise<{ type: "timeout" }>((resolve) => {
+        hardTimer = setTimeout(() => {
+          controller.abort();
+          resolve({ type: "timeout" });
+        }, timeoutMs);
+      });
+
+      const raced = await Promise.race([fetchPromise, timeoutPromise]);
+      if (raced.type === "timeout") {
+        resolvePending?.(null);
+        return;
+      }
+      if (raced.type === "err") {
+        resolvePending?.(null);
+        return;
+      }
+
+      const res = raced.res;
+      if (res.status >= 300 && res.status < 400) {
+        resolvePending?.(null);
+        return;
+      }
+      if (!res.ok) {
+        resolvePending?.(null);
+        return;
+      }
+
+      const parsed = (await res.json().catch(() => null)) as unknown;
+      if (!parsed || typeof parsed !== "object") {
+        resolvePending?.(null);
+        return;
+      }
+      if (!("keys" in parsed) || !Array.isArray((parsed as { keys?: unknown }).keys)) {
+        resolvePending?.(null);
+        return;
+      }
+
+      const jwks = parsed as Jwks;
+      jwksCache.set(cacheKey, { jwks, expiresAt: now + ttlMs });
+      resolvePending?.(jwks);
+    } catch {
+      resolvePending?.(null);
+    } finally {
+      if (hardTimer) clearTimeout(hardTimer);
+      resolvePending = null;
     }
-    return null;
-  } finally {
-    clearTimeout(timer);
-  }
+  })();
+
+  return await pending;
 }
 
 export async function verifyJwt(
@@ -198,18 +269,7 @@ export async function verifyJwt(
     const now = options.nowEpochSeconds ?? Math.floor(Date.now() / 1000);
     if (typeof payload.nbf === "number" && now < payload.nbf) return null;
     if (typeof payload.exp === "number" && now >= payload.exp) return null;
-    if (requirements.issuer && payload.iss !== requirements.issuer) return null;
-    if (requirements.audience) {
-      const aud = payload.aud;
-      const required = requirements.audience;
-      const matches =
-        typeof aud === "string"
-          ? aud === required
-          : Array.isArray(aud)
-            ? aud.some((v) => typeof v === "string" && v === required)
-            : false;
-      if (!matches) return null;
-    }
+    if (!satisfiesJwtRequirements(payload, requirements)) return null;
 
     const signingInput = `${encodedHeader}.${encodedPayload}`;
     const sig = base64UrlToBuffer(encodedSignature);
@@ -227,14 +287,19 @@ export async function verifyJwt(
         config.jwksUrl,
         fetcher,
         options.jwksTimeoutMs ?? DEFAULT_JWKS_TIMEOUT_MS,
+        options.jwksTtlMs ?? DEFAULT_JWKS_TTL_MS,
       );
       if (!jwks) return null;
       publicKey = resolveJwtPublicKeyFromJwks(jwks, typeof header.kid === "string" ? header.kid : undefined);
     }
 
     if (!publicKey) return null;
-    const ok = verify("RSA-SHA256", Buffer.from(signingInput), publicKey, sig);
-    return ok ? payload : null;
+    try {
+      const ok = verify("RSA-SHA256", Buffer.from(signingInput), publicKey, sig);
+      return ok ? payload : null;
+    } catch {
+      return null;
+    }
   }
 
   return null;

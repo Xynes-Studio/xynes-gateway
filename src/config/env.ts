@@ -11,6 +11,7 @@ export const config = {
     jwtAudience: process.env.JWT_AUDIENCE,
     jwtPublicKey: process.env.JWT_PUBLIC_KEY,
     jwksUrl: process.env.JWT_JWKS_URL,
+    jwtRequireIssAudInProd: process.env.JWT_REQUIRE_ISS_AUD_IN_PROD,
   },
   services: {
     docs: process.env.DOC_SERVICE_URL!,
