@@ -27,19 +27,19 @@ describe('DynamicRouter', () => {
       id: '1',
       pathPattern: '/workspaces/:workspaceId/documents',
       method: 'POST',
-      serviceKey: 'DOC_SERVICE',
+      serviceKey: 'doc-service',
       targetPath: '/documents',
       workspaceScoped: true,
-      actionKey: 'document:create'
+      actionKey: 'docs.document.create'
     },
     {
       id: '2',
       pathPattern: '/workspaces/:workspaceId/documents/:id',
       method: 'GET',
-      serviceKey: 'DOC_SERVICE',
+      serviceKey: 'doc-service',
       targetPath: '/documents/:id',
       workspaceScoped: true,
-      actionKey: 'document:read'
+      actionKey: 'docs.document.read'
     },
     {
       id: '3',
@@ -114,7 +114,7 @@ describe('DynamicRouter', () => {
     it('should return true for public route with actionKey (isPublic=true)', async () => {
         const publicRoute: Route = {
             id: 'public-blog',
-            pathPattern: '/blog',
+            pathPattern: '/workspaces/:workspaceId/blog',
             method: 'GET',
             serviceKey: 'CMS',
             targetPath: '/blog',
@@ -122,8 +122,8 @@ describe('DynamicRouter', () => {
             actionKey: 'cms.blog.list',
             isPublic: true
         };
-        const match = { route: publicRoute, params: {} };
-        const req = new Request('http://localhost/blog');
+        const match = { route: publicRoute, params: { workspaceId: 'ws-1' } };
+        const req = new Request('http://localhost/workspaces/ws-1/blog');
         
         const result = await router.authorize(match as RouteMatch, req);
         expect(result).toBe(true);
@@ -146,7 +146,7 @@ describe('DynamicRouter', () => {
       const result = await router.authorize(match!, req);
       
       expect(result).toBe(true);
-      expect(mockAuthzService.check).toHaveBeenCalledWith('user-1', '123', 'document:create');
+      expect(mockAuthzService.check).toHaveBeenCalledWith('user-1', '123', 'docs.document.create');
     });
 
     it('should return false if authz service denies', async () => {
@@ -164,7 +164,7 @@ describe('DynamicRouter', () => {
         const result = await router.authorize(match!, req);
         
         expect(result).toBe(false);
-        expect(mockAuthzService.check).toHaveBeenCalledWith('user-2', '123', 'document:read');
+        expect(mockAuthzService.check).toHaveBeenCalledWith('user-2', '123', 'docs.document.read');
     });
 
     it('should return false if X-XS-User-Id is missing for protected route', async () => {
@@ -235,7 +235,7 @@ describe('DynamicRouter', () => {
         global.fetch = vi.fn() as unknown as typeof fetch;
     });
 
-    it('should proxy request to DOC_SERVICE with correct payload and headers', async () => {
+    it('should proxy request to doc-service with correct payload and headers', async () => {
         const route = mockRoutes[0];
         const match = { route: route!, params: { workspaceId: '123' } };
         const req = new Request('http://localhost/workspaces/123/documents', {
@@ -266,12 +266,8 @@ describe('DynamicRouter', () => {
         const sentBody = JSON.parse(callArgs[1].body);
         
         expect(sentBody).toEqual({
-            actionKey: 'document:create',
-            payload: {
-                body: { title: 'New Doc' },
-                params: { workspaceId: '123' },
-                query: {}
-            }
+            actionKey: 'docs.document.create',
+            payload: { title: 'New Doc' }
         });
 
         const headers = callArgs[1].headers as Headers;
@@ -310,12 +306,8 @@ describe('DynamicRouter', () => {
          const sentBody = JSON.parse(callArgs[1].body);
          
          expect(sentBody).toEqual({
-             actionKey: 'document:read',
-             payload: {
-                 body: {}, // GET has no body
-                 params: { workspaceId: '123', id: '456' },
-                 query: { version: 'v1' }
-             }
+             actionKey: 'docs.document.read',
+             payload: { version: 'v1', id: '456' }
          });
     });
 
@@ -367,7 +359,7 @@ describe('DynamicRouter', () => {
         if (!callArgs) throw new Error('Fetch not called');
         
         const sentBody = JSON.parse(callArgs[1].body);
-        expect(sentBody.payload.body).toEqual({});
+        expect(sentBody.payload).toEqual({});
     });
 
     it('should send telemetry event on successful proxy', async () => {
@@ -407,7 +399,7 @@ describe('DynamicRouter', () => {
         expect(body.payload.source).toBe('gateway');
         expect(body.payload.eventType).toBe('http.request');
         expect(body.payload.targetType).toBe('service');
-        expect(body.payload.targetId).toBe('DOC_SERVICE');
+        expect(body.payload.targetId).toBe('doc-service');
         expect(body.payload.metadata.statusCode).toBe(201);
         expect(body.payload.metadata.userId).toBe('user-1');
         expect(body.payload.metadata.workspaceId).toBe('123');

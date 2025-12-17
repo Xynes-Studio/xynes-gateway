@@ -21,7 +21,7 @@ The gateway is built using Bun and Hono. It acts as the entry point for all Xyne
 ### Global Standards
 
 - **Folder Structure**: Feature-based separation in `src/`.
-- **Testing**: TDD is mandatory. 75%+ coverage required. Use `bun test`.
+- **Testing**: TDD is mandatory. 80%+ coverage required. Use `bun test --coverage`.
 - **Linting**: Keep code clean.
 
 ### Environment
@@ -52,6 +52,11 @@ The gateway is built using Bun and Hono. It acts as the entry point for all Xyne
    bun run coverage
    ```
 
+5. Run lint:
+   ```bash
+   bun run lint
+   ```
+
 ## Routes
 
 - `GET /health`: Liveness check. Returns `{ status: "ok", service: "xynes-gateway" }`.
@@ -68,9 +73,9 @@ The Dynamic Router implements a "Smart Proxy" pattern:
 1. **Matching**: Matches incoming `method` + `path` to a `Route`.
 2. **Authorization**: Checks `X-XS-User-Id` against RBAC (Authz Service).
 3. **Action Mapping**: Maps matched route to a downstream "Action" endpoint.
-   - `DOC_SERVICE` -> `${DOC_SERVICE_URL}/internal/doc-actions`
-   - `CMS_CORE` -> `${CMS_CORE_URL}/internal/cms-actions`
-4. **Payload Construction**: Wraps body, params, and query into a standardized Action Payload.
+   - `doc-service` -> `${DOC_SERVICE_URL}/internal/doc-actions`
+   - `cms-core` -> `${CMS_CORE_URL}/internal/cms-actions`
+4. **Payload Construction**: Builds a single JSON payload object by merging request JSON body + query + path params (path params win; `workspaceId` is header-only).
 5. **Telemetry**: Asynchronously records request tracking.
 
 ### Public Routes (GATE-6)
@@ -83,6 +88,19 @@ Routes can be marked as `isPublic: true` to bypass authorization checks:
 **Current Public Routes:**
 - `GET /workspaces/:workspaceId/blog` – List published blog entries.
 - `GET /workspaces/:workspaceId/blog/:slug` – Get published blog entry by slug.
+- `GET /workspaces/:workspaceId/content/:routeSegment` – Generic published content listing (template-driven).
+- `GET /workspaces/:workspaceId/content/:routeSegment/:slug` – Generic published content by slug (template-driven).
+
+### Generic Content API (ROUTES-CONTENT-1)
+
+The gateway exposes template-driven content routes under `/content/**` so adding a new content type does not require adding new gateway routes (no per-template routes like `/programs`).
+
+- **Route → Action mapping**
+  - `GET /workspaces/:workspaceId/content/:routeSegment` → `cms.content.listPublished`
+  - `GET /workspaces/:workspaceId/content/:routeSegment/:slug` → `cms.content.getPublishedBySlug`
+- **Payload mapping**
+  - `routeSegment` and `slug` are forwarded as top-level payload keys alongside any query params.
+  - Workspace context is enforced via the `:workspaceId` path param, even though these routes are `isPublic=true`.
 
 ### Standard Response Envelope (GATE-4)
 

@@ -10,10 +10,10 @@ export interface Route {
   id: string;
   pathPattern: string;
   method: string;
-  serviceKey: string; // e.g., 'DOC_SERVICE'
+  serviceKey: string; // e.g., 'doc-service' or 'cms-core'
   targetPath: string; // e.g., '/documents/:id'
   workspaceScoped: boolean;
-  actionKey?: string; // e.g., 'document:read'
+  actionKey?: string; // e.g., 'docs.document.read'
   isPublic?: boolean;
 }
 

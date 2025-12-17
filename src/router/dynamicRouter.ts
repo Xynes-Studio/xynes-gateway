@@ -17,6 +17,41 @@ export class DynamicRouter {
     this.authzService = authzService;
   }
 
+  private static readonly UNSAFE_PAYLOAD_KEYS = new Set([
+    "__proto__",
+    "prototype",
+    "constructor",
+  ]);
+
+  private static isPlainRecord(value: unknown): value is Record<string, unknown> {
+    return (
+      value !== null &&
+      typeof value === "object" &&
+      !Array.isArray(value) &&
+      Object.getPrototypeOf(value) === Object.prototype
+    );
+  }
+
+  private static copySafe(
+    target: Record<string, unknown>,
+    source: Record<string, unknown>,
+  ): void {
+    for (const [key, value] of Object.entries(source)) {
+      if (DynamicRouter.UNSAFE_PAYLOAD_KEYS.has(key)) continue;
+      target[key] = value;
+    }
+  }
+
+  private static coerceQueryValue(value: string): string | number | boolean {
+    const trimmed = value.trim();
+    if (/^(true|false)$/i.test(trimmed)) return trimmed.toLowerCase() === "true";
+    if (/^-?\d+$/.test(trimmed)) {
+      const asNum = Number(trimmed);
+      if (Number.isSafeInteger(asNum)) return asNum;
+    }
+    return value;
+  }
+
   /**
    * Finds a matching route for the given method and path.
    */
@@ -76,6 +111,14 @@ export class DynamicRouter {
   async authorize(match: RouteMatch, request: Request): Promise<boolean> {
     const { route, params } = match;
 
+    // Enforce workspace context even for public routes.
+    if (route.workspaceScoped && !params.workspaceId) {
+      console.warn(
+        `[DynamicRouter] Blocked request to ${route.pathPattern}: Missing workspaceId in params`,
+      );
+      return false;
+    }
+
     // If no actionKey, it's public (or at least not RBAC protected by this gate)
     if (!route.actionKey) {
       return true;
@@ -94,11 +137,6 @@ export class DynamicRouter {
 
     // Resolve workspaceId
     const workspaceId: string | null = params.workspaceId || null;
-
-    if (route.workspaceScoped && !workspaceId) {
-       console.warn(`[DynamicRouter] Blocked request to ${route.pathPattern}: Missing workspaceId in params`);
-       return false;
-    }
 
     // If not workspace scoped, workspaceId might be null, which is fine.
     return this.authzService.check(userId, workspaceId, route.actionKey);
@@ -120,12 +158,17 @@ export class DynamicRouter {
     }
 
     // Resolve Service URL
+    const serviceKeyNormalized = serviceKey.trim().toLowerCase();
     let serviceUrl = '';
-    switch (serviceKey) {
-        case 'DOC_SERVICE':
+    switch (serviceKeyNormalized) {
+        case 'doc_service':
+        case 'doc-service':
+        case 'docservice':
             serviceUrl = config.services.docs;
             break;
-        case 'CMS_CORE':
+        case 'cms_core':
+        case 'cms-core':
+        case 'cmscore':
             serviceUrl = config.services.cms;
             break;
         default: {
@@ -142,9 +185,9 @@ export class DynamicRouter {
     // "cms-core" → ${CMS_CORE_URL}/internal/cms-actions
     
     let actionEndpoint = '';
-    if (serviceKey === 'DOC_SERVICE') {
+    if (serviceKeyNormalized === 'doc_service' || serviceKeyNormalized === 'doc-service' || serviceKeyNormalized === 'docservice') {
         actionEndpoint = `${serviceUrl}/internal/doc-actions`;
-    } else if (serviceKey === 'CMS_CORE') {
+    } else if (serviceKeyNormalized === 'cms_core' || serviceKeyNormalized === 'cms-core' || serviceKeyNormalized === 'cmscore') {
         actionEndpoint = `${serviceUrl}/internal/cms-actions`;
     } else {
         // Generic fallback or specific?
@@ -152,25 +195,43 @@ export class DynamicRouter {
     }
 
     // Build Payload
-    let body = {};
+    let body: unknown = {};
     if (request.method !== 'GET' && request.method !== 'HEAD') {
         try {
             // Clone request to avoid consuming body if we need it later (though we just consume it here)
             // But we can't clone if we already read it? 
             // Better to just read it once.
-            body = await request.json() as Record<string, unknown>;
+            body = await request.json();
         } catch {
             // ignore if no body
         }
     }
 
+    // Internal action payloads are service-owned. Map request body + query + params into a single payload object
+    // (with path params taking precedence) and protect against prototype pollution.
+    const payload: Record<string, unknown> = Object.create(null);
+    if (DynamicRouter.isPlainRecord(body)) {
+      DynamicRouter.copySafe(payload, body);
+    }
+
+    const safeQuery: Record<string, unknown> = Object.create(null);
+    for (const [key, value] of Object.entries(query)) {
+      if (DynamicRouter.UNSAFE_PAYLOAD_KEYS.has(key)) continue;
+      safeQuery[key] = DynamicRouter.coerceQueryValue(value);
+    }
+    DynamicRouter.copySafe(payload, safeQuery);
+
+    const safeParams: Record<string, unknown> = Object.create(null);
+    for (const [key, value] of Object.entries(params)) {
+      if (DynamicRouter.UNSAFE_PAYLOAD_KEYS.has(key)) continue;
+      if (key === "workspaceId") continue;
+      safeParams[key] = value;
+    }
+    DynamicRouter.copySafe(payload, safeParams);
+
     const actionPayload = {
         actionKey,
-        payload: {
-            body,
-            params,
-            query
-        }
+        payload
     };
 
     // Forward Headers
