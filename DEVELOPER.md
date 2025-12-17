@@ -73,8 +73,8 @@ The Dynamic Router implements a "Smart Proxy" pattern:
 1. **Matching**: Matches incoming `method` + `path` to a `Route`.
 2. **Authorization**: Checks `X-XS-User-Id` against RBAC (Authz Service).
 3. **Action Mapping**: Maps matched route to a downstream "Action" endpoint.
-   - `DOC_SERVICE` -> `${DOC_SERVICE_URL}/internal/doc-actions`
-   - `CMS_CORE` -> `${CMS_CORE_URL}/internal/cms-actions`
+   - `doc-service` -> `${DOC_SERVICE_URL}/internal/doc-actions`
+   - `cms-core` -> `${CMS_CORE_URL}/internal/cms-actions`
 4. **Payload Construction**: Builds a single JSON payload object by merging request JSON body + query + path params (path params win; `workspaceId` is header-only).
 5. **Telemetry**: Asynchronously records request tracking.
 
