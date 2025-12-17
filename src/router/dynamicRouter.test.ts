@@ -360,6 +360,7 @@ describe('DynamicRouter', () => {
         const req = {
             method: 'POST',
             headers: new Headers(),
+            url: 'http://localhost/workspaces/123/documents',
             json: vi.fn().mockRejectedValue(new Error('Invalid JSON'))
         } as unknown as Request;
 
@@ -378,7 +379,7 @@ describe('DynamicRouter', () => {
     it('should send telemetry event on successful proxy', async () => {
         const route = mockRoutes[0];
         const match = { route: route!, params: { workspaceId: '123' } };
-        const req = new Request('http://localhost/workspaces/123/documents', {
+        const req = new Request('http://localhost/workspaces/123/documents?token=supersecret&foo=bar', {
              method: 'POST',
              headers: { 'X-XS-User-Id': 'attacker' }
         });
@@ -413,6 +414,9 @@ describe('DynamicRouter', () => {
         expect(body.payload.eventType).toBe('http.request');
         expect(body.payload.targetType).toBe('service');
         expect(body.payload.targetId).toBe('doc-service');
+        expect(body.payload.metadata.path).toBe('/workspaces/123/documents');
+        expect(telemetryCall![1].body).not.toContain('supersecret');
+        expect(telemetryCall![1].body).not.toContain('token=');
         expect(body.payload.metadata.statusCode).toBe(201);
         expect(body.payload.metadata.userId).toBe('user-1');
         expect(body.payload.metadata.workspaceId).toBe('123');

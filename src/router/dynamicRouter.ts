@@ -9,6 +9,7 @@ import { generateRequestId } from '../utils/requestId';
 import { mapStatusToErrorCode, extractErrorFromBody, getDefaultMessageForCode } from '../utils/errorMapper';
 import { buildInternalHeaders } from '../security/internalHeaders';
 import { extractBearerToken, verifyJwt } from '../utils/jwt';
+import { getPathnameFromUrlOrPath } from '../utils/url';
 
 export class DynamicRouter {
   private routes: Route[];
@@ -315,7 +316,7 @@ export class DynamicRouter {
     
     telemetryService.trackRequest({
         method: request.method,
-        path: request.url,
+        path: getPathnameFromUrlOrPath(request.url),
         pathPattern: route.pathPattern,
         serviceKey,
         actionKey,

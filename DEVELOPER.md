@@ -23,6 +23,7 @@ The gateway is built using Bun and Hono. It acts as the entry point for all Xyne
 - **Folder Structure**: Feature-based separation in `src/`.
 - **Testing**: TDD is mandatory. 80%+ coverage required. Use `bun test --coverage`.
 - **Linting**: Keep code clean.
+- **Security**: Do not persist secrets in logs/telemetry. Never emit raw URL query strings to telemetry.
 
 ### Testing Strategy (ADR-aligned)
 
@@ -64,6 +65,13 @@ We follow the platform test pyramid described in `../xynes-cms-core/docs/adr/001
    ```bash
    bun run lint
    ```
+
+## Telemetry URL Redaction (SEC-GW-URL-1)
+
+Gateway HTTP request telemetry **must not** include raw URL query strings (query params frequently contain secrets like `token`, `code`, `key`).
+
+- The gateway emits `metadata.path` as **pathname only** (no `?query` / `#hash`).
+- Regression coverage exists to ensure requests like `...?token=supersecret` do not place secrets into telemetry payloads.
 
 ## Routes
 
