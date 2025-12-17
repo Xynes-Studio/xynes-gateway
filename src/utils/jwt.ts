@@ -30,6 +30,7 @@ export type JwtClaims = Record<string, unknown> & {
 
 export interface JwtVerificationOptions {
   nowEpochSeconds?: number;
+  jwksTimeoutMs?: number;
 }
 
 export interface JwtRequirements {
@@ -110,6 +111,7 @@ export interface JwtVerifierConfig {
 
 const jwksCache = new Map<string, { expiresAt: number; jwks: Jwks }>();
 const DEFAULT_JWKS_TTL_MS = 5 * 60 * 1000;
+const DEFAULT_JWKS_TIMEOUT_MS = 3_000;
 
 function base64UrlToBuffer(input: string): Buffer {
   return Buffer.from(base64UrlToBase64(input), "base64");
@@ -127,20 +129,42 @@ function resolveJwtPublicKeyFromJwks(jwks: Jwks, kid?: string): ReturnType<typeo
   }
 }
 
-async function getJwks(jwksUrl: string, fetcher: typeof fetch): Promise<Jwks | null> {
+async function getJwks(
+  jwksUrl: string,
+  fetcher: typeof fetch,
+  timeoutMs: number,
+): Promise<Jwks | null> {
   const now = Date.now();
   const cached = jwksCache.get(jwksUrl);
   if (cached && cached.expiresAt > now) return cached.jwks;
 
-  const res = await fetcher(jwksUrl, { method: "GET" });
-  if (!res.ok) return null;
-  const parsed = (await res.json().catch(() => null)) as unknown;
-  if (!parsed || typeof parsed !== "object") return null;
-  if (!("keys" in parsed) || !Array.isArray((parsed as { keys?: unknown }).keys)) return null;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
 
-  const jwks = parsed as Jwks;
-  jwksCache.set(jwksUrl, { jwks, expiresAt: now + DEFAULT_JWKS_TTL_MS });
-  return jwks;
+  try {
+    const res = await fetcher(jwksUrl, { method: "GET", signal: controller.signal });
+    if (!res.ok) return null;
+    const parsed = (await res.json().catch(() => null)) as unknown;
+    if (!parsed || typeof parsed !== "object") return null;
+    if (!("keys" in parsed) || !Array.isArray((parsed as { keys?: unknown }).keys))
+      return null;
+
+    const jwks = parsed as Jwks;
+    jwksCache.set(jwksUrl, { jwks, expiresAt: now + DEFAULT_JWKS_TTL_MS });
+    return jwks;
+  } catch (err: unknown) {
+    if (
+      err &&
+      typeof err === "object" &&
+      "name" in err &&
+      (err as { name?: unknown }).name === "AbortError"
+    ) {
+      return null;
+    }
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 export async function verifyJwt(
@@ -199,7 +223,11 @@ export async function verifyJwt(
       }
     } else if (config.jwksUrl) {
       const fetcher = options.fetcher ?? fetch;
-      const jwks = await getJwks(config.jwksUrl, fetcher);
+      const jwks = await getJwks(
+        config.jwksUrl,
+        fetcher,
+        options.jwksTimeoutMs ?? DEFAULT_JWKS_TIMEOUT_MS,
+      );
       if (!jwks) return null;
       publicKey = resolveJwtPublicKeyFromJwks(jwks, typeof header.kid === "string" ? header.kid : undefined);
     }

@@ -90,4 +90,35 @@ describe("jwt", () => {
     );
     expect(claims?.sub).toBe("user-1");
   });
+
+  it("verifyJwt should abort JWKS fetch on timeout", async () => {
+    const { privateKeyPem } = createRsaKeyPairForTest();
+    const token = signRs256ForTest({ sub: "user-1", exp: 2_000_000_000 }, privateKeyPem, { kid: "k1" });
+
+    let capturedSignal: AbortSignal | null = null;
+    const fetcher = async (_url: string, init?: RequestInit) => {
+      capturedSignal = (init?.signal as AbortSignal | undefined) ?? null;
+      return await new Promise<Response>((_resolve, reject) => {
+        capturedSignal?.addEventListener("abort", () => {
+          const err = new Error("aborted");
+          (err as unknown as { name: string }).name = "AbortError";
+          reject(err);
+        });
+      });
+    };
+
+    const result = await Promise.race([
+      verifyJwt(
+        token,
+        { jwksUrl: "https://jwks-timeout.local" },
+        { nowEpochSeconds: 1_999_999_999, jwksTimeoutMs: 10, fetcher: fetcher as unknown as typeof fetch },
+      ),
+      new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), 1_000)),
+    ]);
+
+    expect(result).not.toBe("timeout");
+    expect(result).toBeNull();
+    expect(capturedSignal).toBeTruthy();
+    expect(capturedSignal?.aborted).toBe(true);
+  });
 });
