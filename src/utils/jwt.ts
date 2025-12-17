@@ -164,10 +164,18 @@ async function getJwks(
   const existing = jwksInFlight.get(cacheKey);
   if (existing) return await existing;
 
-  const controller = new AbortController();
-  let hardTimer: ReturnType<typeof setTimeout> | null = null;
+  let resolvePending: ((jwks: Jwks | null) => void) | null = null;
+  const pending = new Promise<Jwks | null>((resolve) => {
+    resolvePending = resolve;
+  });
+  jwksInFlight.set(cacheKey, pending);
+  void pending.finally(() => {
+    jwksInFlight.delete(cacheKey);
+  });
 
-  const pending = (async (): Promise<Jwks | null> => {
+  void (async (): Promise<void> => {
+    const controller = new AbortController();
+    let hardTimer: ReturnType<typeof setTimeout> | null = null;
     try {
       const fetchPromise = fetcher(url.toString(), {
         method: "GET",
@@ -188,41 +196,45 @@ async function getJwks(
 
       const raced = await Promise.race([fetchPromise, timeoutPromise]);
       if (raced.type === "timeout") {
-        return null;
+        resolvePending?.(null);
+        return;
       }
       if (raced.type === "err") {
-        const err = raced.err;
-        if (
-          err &&
-          typeof err === "object" &&
-          "name" in err &&
-          (err as { name?: unknown }).name === "AbortError"
-        ) {
-          return null;
-        }
-        return null;
+        resolvePending?.(null);
+        return;
       }
 
       const res = raced.res;
-
-      if (res.status >= 300 && res.status < 400) return null;
-      if (!res.ok) return null;
+      if (res.status >= 300 && res.status < 400) {
+        resolvePending?.(null);
+        return;
+      }
+      if (!res.ok) {
+        resolvePending?.(null);
+        return;
+      }
 
       const parsed = (await res.json().catch(() => null)) as unknown;
-      if (!parsed || typeof parsed !== "object") return null;
-      if (!("keys" in parsed) || !Array.isArray((parsed as { keys?: unknown }).keys)) return null;
+      if (!parsed || typeof parsed !== "object") {
+        resolvePending?.(null);
+        return;
+      }
+      if (!("keys" in parsed) || !Array.isArray((parsed as { keys?: unknown }).keys)) {
+        resolvePending?.(null);
+        return;
+      }
 
       const jwks = parsed as Jwks;
       jwksCache.set(cacheKey, { jwks, expiresAt: now + ttlMs });
-      return jwks;
+      resolvePending?.(jwks);
+    } catch {
+      resolvePending?.(null);
     } finally {
       if (hardTimer) clearTimeout(hardTimer);
+      resolvePending = null;
     }
-  })().finally(() => {
-    jwksInFlight.delete(cacheKey);
-  });
+  })();
 
-  jwksInFlight.set(cacheKey, pending);
   return await pending;
 }
 
