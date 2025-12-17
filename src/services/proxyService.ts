@@ -42,10 +42,13 @@ export class ProxyService {
 
     headers.set("X-XS-User-Id", sanitizeInternalHeaderValue(ctx.userId ?? ""));
     if (this.internalServiceToken) {
-      headers.set('X-Internal-Service-Token', this.internalServiceToken);
+      headers.set(
+        "X-Internal-Service-Token",
+        sanitizeInternalHeaderValue(this.internalServiceToken),
+      );
     }
     if (route.workspaceScoped && params.workspaceId) {
-      headers.set('X-Workspace-Id', params.workspaceId);
+      headers.set("X-Workspace-Id", sanitizeInternalHeaderValue(params.workspaceId));
     }
 
     // Remove host header to avoid conflicts
