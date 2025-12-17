@@ -1,12 +1,16 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'bun:test';
 import type { Route, RouteMatch } from '../types';
 import type { IAuthzService } from '../services/authzService';
+import { signHs256ForTest } from "../testUtils/jwtTestUtils";
 
 type MockFn = ReturnType<typeof vi.fn>;
 
 vi.module('../infra/config', () => ({
   config: {
     internalServiceToken: 'test-internal-token',
+    auth: {
+      jwtSecret: 'test-jwt-secret',
+    },
     services: {
       docs: 'http://localhost:3001',
       cms: 'http://localhost:3003',
@@ -107,7 +111,7 @@ describe('DynamicRouter', () => {
        const match = router.findMatch('GET', '/public/stats');
        expect(match).toBeDefined();
        const result = await router.authorize(match!, new Request('http://localhost/public/stats'));
-       expect(result).toBe(true);
+       expect(result).toEqual({ authorized: true, userId: null });
        expect(mockAuthzService.check).not.toHaveBeenCalled();
     });
 
@@ -126,7 +130,7 @@ describe('DynamicRouter', () => {
         const req = new Request('http://localhost/workspaces/ws-1/blog');
         
         const result = await router.authorize(match as RouteMatch, req);
-        expect(result).toBe(true);
+        expect(result).toEqual({ authorized: true, userId: null });
         expect(mockAuthzService.check).not.toHaveBeenCalled();
     });
 
@@ -136,16 +140,18 @@ describe('DynamicRouter', () => {
       
       (mockAuthzService.check as unknown as MockFn).mockResolvedValue(true);
 
+      const token = signHs256ForTest({ sub: "user-1", exp: 2_000_000_000 }, "test-jwt-secret");
       const req = new Request('http://localhost/workspaces/123/documents', {
         method: 'POST',
         headers: {
-          'X-XS-User-Id': 'user-1'
+          Authorization: `Bearer ${token}`,
+          'X-XS-User-Id': 'attacker'
         }
       });
 
       const result = await router.authorize(match!, req);
       
-      expect(result).toBe(true);
+      expect(result).toEqual({ authorized: true, userId: "user-1" });
       expect(mockAuthzService.check).toHaveBeenCalledWith('user-1', '123', 'docs.document.create');
     });
 
@@ -155,19 +161,21 @@ describe('DynamicRouter', () => {
         
         (mockAuthzService.check as unknown as MockFn).mockResolvedValue(false);
   
+        const token = signHs256ForTest({ sub: "user-2", exp: 2_000_000_000 }, "test-jwt-secret");
         const req = new Request('http://localhost/workspaces/123/documents/456', {
           headers: {
-            'X-XS-User-Id': 'user-2'
+            Authorization: `Bearer ${token}`,
+            'X-XS-User-Id': 'attacker'
           }
         });
   
         const result = await router.authorize(match!, req);
         
-        expect(result).toBe(false);
+        expect(result).toEqual(expect.objectContaining({ authorized: false, status: 403 }));
         expect(mockAuthzService.check).toHaveBeenCalledWith('user-2', '123', 'docs.document.read');
     });
 
-    it('should return false if X-XS-User-Id is missing for protected route', async () => {
+    it('should return 401 if Authorization is missing/invalid for protected route', async () => {
         const match = router.findMatch('POST', '/workspaces/123/documents');
         expect(match).toBeDefined();
 
@@ -176,7 +184,7 @@ describe('DynamicRouter', () => {
         });
 
         const result = await router.authorize(match!, req);
-        expect(result).toBe(false);
+        expect(result).toEqual(expect.objectContaining({ authorized: false, status: 401 }));
     });
 
     // New tests for workspaceScoped logic
@@ -190,7 +198,7 @@ describe('DynamicRouter', () => {
         };
 
         const result = await router.authorize(match as RouteMatch, new Request('http://localhost/...'));
-        expect(result).toBe(false);
+        expect(result).toEqual(expect.objectContaining({ authorized: false, status: 400 }));
         expect(mockAuthzService.check).not.toHaveBeenCalled();
     });
 
@@ -209,14 +217,15 @@ describe('DynamicRouter', () => {
         
         (mockAuthzService.check as unknown as MockFn).mockResolvedValue(true);
 
+        const token = signHs256ForTest({ sub: "admin-user", exp: 2_000_000_000 }, "test-jwt-secret");
         const req = new Request('http://localhost/admin/settings', {
             method: 'POST',
-            headers: { 'X-XS-User-Id': 'admin-user' }
+            headers: { Authorization: `Bearer ${token}` }
         });
 
         const result = await router.authorize(match as RouteMatch, req);
 
-        expect(result).toBe(true);
+        expect(result).toEqual({ authorized: true, userId: "admin-user" });
         // Expect workspaceId to be null (or undefined depending on implementation, let's say null/undefined)
         // Checking call arguments
         const calls = (mockAuthzService.check as unknown as MockFn).mock.calls;
@@ -241,7 +250,10 @@ describe('DynamicRouter', () => {
         const req = new Request('http://localhost/workspaces/123/documents', {
             method: 'POST',
             headers: {
-                'X-XS-User-Id': 'user-1',
+                'X-XS-User-Id': 'attacker',
+                'X-Workspace-Id': 'attacker-workspace',
+                'X-Internal-Service-Token': 'attacker-token',
+                'User-Agent': 'test-agent',
                 'Content-Type': 'application/json'
             },
             body: JSON.stringify({ title: 'New Doc' })
@@ -249,7 +261,7 @@ describe('DynamicRouter', () => {
 
         (global.fetch as unknown as MockFn).mockResolvedValue(new Response('{"id":"doc-1"}', { status: 201 }));
 
-        const response = await router.proxyRequest(match, req, {});
+        const response = await router.proxyRequest(match, req, {}, 'user-1');
         
         expect(global.fetch).toHaveBeenCalledWith(
             'http://localhost:3001/internal/doc-actions',
@@ -274,6 +286,7 @@ describe('DynamicRouter', () => {
         expect(headers.get('X-XS-User-Id')).toBe('user-1');
         expect(headers.get('X-Workspace-Id')).toBe('123');
         expect(headers.get('X-Internal-Service-Token')).toBe('test-internal-token');
+        expect(headers.get('User-Agent')).toBe('test-agent');
         
         expect(response.status).toBe(201);
         const resBody = await response.json();
@@ -293,13 +306,13 @@ describe('DynamicRouter', () => {
         const req = new Request('http://localhost/workspaces/123/documents/456?version=v1', {
             method: 'GET',
             headers: {
-                'X-XS-User-Id': 'user-1'
+                'X-XS-User-Id': 'attacker'
             }
         });
 
         (global.fetch as unknown as MockFn).mockResolvedValue(new Response('{"id":"456"}', { status: 200 }));
 
-        await router.proxyRequest(match, req, { version: 'v1' });
+        await router.proxyRequest(match, req, { version: 'v1' }, 'user-1');
         
          const callArgs = (global.fetch as unknown as MockFn).mock.calls[0];
          if (!callArgs) throw new Error('Fetch not called');
@@ -316,7 +329,7 @@ describe('DynamicRouter', () => {
         const match = { route: badRoute, params: {} };
         const req = new Request('http://localhost/oops');
         
-        const response = await router.proxyRequest(match, req, {});
+        const response = await router.proxyRequest(match, req, {}, null);
         expect(response.status).toBe(500);
     });
 
@@ -327,7 +340,7 @@ describe('DynamicRouter', () => {
 
         (global.fetch as unknown as MockFn).mockRejectedValue(new Error('Network error'));
 
-        const response = await router.proxyRequest(match, req, {});
+        const response = await router.proxyRequest(match, req, {}, null);
         expect(response.status).toBe(502);
     });
 
@@ -336,7 +349,7 @@ describe('DynamicRouter', () => {
         const match = { route, params: {} };
         const req = new Request('http://localhost/oops');
         
-        const response = await router.proxyRequest(match, req, {});
+        const response = await router.proxyRequest(match, req, {}, null);
         expect(response.status).toBe(502);
     });
 
@@ -352,7 +365,7 @@ describe('DynamicRouter', () => {
 
         (global.fetch as unknown as MockFn).mockResolvedValue(new Response('{}', { status: 200 }));
 
-        await router.proxyRequest(match, req, {});
+        await router.proxyRequest(match, req, {}, null);
         
         // Should proceed with empty body
         const callArgs = (global.fetch as unknown as MockFn).mock.calls[0];
@@ -367,7 +380,7 @@ describe('DynamicRouter', () => {
         const match = { route: route!, params: { workspaceId: '123' } };
         const req = new Request('http://localhost/workspaces/123/documents', {
              method: 'POST',
-             headers: { 'X-XS-User-Id': 'user-1' }
+             headers: { 'X-XS-User-Id': 'attacker' }
         });
 
         // Mock fetch to handle both calls
@@ -381,7 +394,7 @@ describe('DynamicRouter', () => {
             return new Response('Not Found', { status: 404 });
         });
 
-        await router.proxyRequest(match, req, {});
+        await router.proxyRequest(match, req, {}, 'user-1');
         
         // Wait for fire-and-forget telemetry
         await new Promise(resolve => setTimeout(resolve, 0));
@@ -422,7 +435,7 @@ describe('DynamicRouter', () => {
             return new Response('Not Found', { status: 404 });
         });
 
-        const response = await router.proxyRequest(match, req, {});
+        const response = await router.proxyRequest(match, req, {}, null);
         expect(response.status).toBe(500);
 
         await new Promise(resolve => setTimeout(resolve, 0));
@@ -449,7 +462,7 @@ describe('DynamicRouter', () => {
             return new Response('Not Found', { status: 404 });
         });
 
-        const response = await router.proxyRequest(match, req, {});
+        const response = await router.proxyRequest(match, req, {}, null);
         expect(response.status).toBe(201); // Main request succeeds
 
         await new Promise(resolve => setTimeout(resolve, 0));

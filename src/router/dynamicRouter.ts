@@ -7,6 +7,8 @@ import { telemetryService } from '../services/telemetryService';
 import { createSuccessResponse, createErrorResponse } from '../types/envelope';
 import { generateRequestId } from '../utils/requestId';
 import { mapStatusToErrorCode, extractErrorFromBody, getDefaultMessageForCode } from '../utils/errorMapper';
+import { buildInternalHeaders } from '../security/internalHeaders';
+import { extractBearerToken, verifyJwt } from '../utils/jwt';
 
 export class DynamicRouter {
   private routes: Route[];
@@ -108,7 +110,28 @@ export class DynamicRouter {
   /**
    * Authorizes the request using AuthzService
    */
-  async authorize(match: RouteMatch, request: Request): Promise<boolean> {
+  private async getAuthenticatedUserId(request: Request): Promise<string | null> {
+    const token = extractBearerToken(request.headers.get("Authorization"));
+    if (!token) return null;
+    const claims = await verifyJwt(token, {
+      hs256Secret: config.auth?.jwtSecret,
+      issuer: config.auth?.jwtIssuer,
+      audience: config.auth?.jwtAudience,
+      publicKeyPem: config.auth?.jwtPublicKey,
+      jwksUrl: config.auth?.jwksUrl,
+    });
+    return typeof claims?.sub === "string" && claims.sub.length > 0
+      ? claims.sub
+      : null;
+  }
+
+  async authorize(
+    match: RouteMatch,
+    request: Request,
+  ): Promise<
+    | { authorized: true; userId: string | null }
+    | { authorized: false; status: number; errorCode: string; message: string }
+  > {
     const { route, params } = match;
 
     // Enforce workspace context even for public routes.
@@ -116,36 +139,64 @@ export class DynamicRouter {
       console.warn(
         `[DynamicRouter] Blocked request to ${route.pathPattern}: Missing workspaceId in params`,
       );
-      return false;
+      return {
+        authorized: false,
+        status: 400,
+        errorCode: "VALIDATION_ERROR",
+        message: "Missing workspaceId in path",
+      };
     }
 
     // If no actionKey, it's public (or at least not RBAC protected by this gate)
     if (!route.actionKey) {
-      return true;
+      return { authorized: true, userId: await this.getAuthenticatedUserId(request) };
     }
 
     // If route is explicitly public, skip authz
     if (route.isPublic) {
-      return true;
+      return { authorized: true, userId: await this.getAuthenticatedUserId(request) };
     }
 
-    const userId = request.headers.get('X-XS-User-Id');
+    const userId = await this.getAuthenticatedUserId(request);
     if (!userId) {
-      console.warn(`[DynamicRouter] Blocked request to ${route.pathPattern}: Missing X-XS-User-Id`);
-      return false; // Treat missing header as unauthorized
+      console.warn(
+        `[DynamicRouter] Blocked request to ${route.pathPattern}: Missing/invalid Authorization token`,
+      );
+      return {
+        authorized: false,
+        status: 401,
+        errorCode: "UNAUTHORIZED",
+        message: "Missing or invalid authentication",
+      };
     }
 
     // Resolve workspaceId
     const workspaceId: string | null = params.workspaceId || null;
 
     // If not workspace scoped, workspaceId might be null, which is fine.
-    return this.authzService.check(userId, workspaceId, route.actionKey);
+    const allowed = await this.authzService.check(userId, workspaceId, route.actionKey);
+    if (!allowed) {
+      return {
+        authorized: false,
+        status: 403,
+        errorCode: "FORBIDDEN",
+        message: "Access Denied",
+      };
+    }
+
+    return { authorized: true, userId };
   }
 
   /**
    * Proxies the request to the downstream service action endpoint.
    */
-  async proxyRequest(match: RouteMatch, request: Request, query: Record<string, string>, requestId?: string): Promise<Response> {
+  async proxyRequest(
+    match: RouteMatch,
+    request: Request,
+    query: Record<string, string>,
+    userId: string | null,
+    requestId?: string,
+  ): Promise<Response> {
     const { route, params } = match;
     const { serviceKey, actionKey } = route;
     const startTime = Date.now();
@@ -235,23 +286,13 @@ export class DynamicRouter {
     };
 
     // Forward Headers
-    const headers = new Headers();
-    headers.set('Content-Type', 'application/json');
-
-    if (config.internalServiceToken) {
-        headers.set('X-Internal-Service-Token', config.internalServiceToken);
-    }
-    
-    const userId = request.headers.get('X-XS-User-Id');
-    if (userId) {
-        headers.set('X-XS-User-Id', userId);
-    }
-    
     const workspaceId = route.workspaceScoped && params.workspaceId ? params.workspaceId : null;
-    
-    if (workspaceId) {
-        headers.set('X-Workspace-Id', workspaceId);
-    }
+    const headers = buildInternalHeaders(request.headers, {
+      internalServiceToken: config.internalServiceToken,
+      workspaceId,
+      userId,
+      requestId: reqId,
+    });
 
     let response: Response;
     let downstreamStatus = 502;
@@ -333,13 +374,13 @@ export class DynamicRouter {
       const match = this.findMatch(c.req.method, c.req.path);
       
       if (match) {
-          const authorized = await this.authorize(match, c.req.raw);
-          if (!authorized) {
-              const errorResponse = createErrorResponse('FORBIDDEN', 'Access Denied', requestId);
-              return c.json(errorResponse, 403);
+          const auth = await this.authorize(match, c.req.raw);
+          if (!auth.authorized) {
+              const errorResponse = createErrorResponse(auth.errorCode, auth.message, requestId);
+              return c.json(errorResponse, auth.status);
           }
           
-          const response = await this.proxyRequest(match, c.req.raw, c.req.query(), requestId);
+          const response = await this.proxyRequest(match, c.req.raw, c.req.query(), auth.userId, requestId);
           return response;
       }
       

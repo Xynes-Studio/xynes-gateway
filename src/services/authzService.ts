@@ -12,6 +12,23 @@ export class AuthzService implements IAuthzService {
     this.internalServiceToken = internalServiceToken;
   }
 
+  private static extractAllowed(value: unknown): boolean | null {
+    if (!value || typeof value !== "object") return null;
+
+    if ("allowed" in value && typeof (value as { allowed?: unknown }).allowed === "boolean") {
+      return (value as { allowed: boolean }).allowed;
+    }
+
+    if ("ok" in value && (value as { ok?: unknown }).ok === true && "data" in value) {
+      const data = (value as { data?: unknown }).data;
+      if (data && typeof data === "object" && "allowed" in data && typeof (data as { allowed?: unknown }).allowed === "boolean") {
+        return (data as { allowed: boolean }).allowed;
+      }
+    }
+
+    return null;
+  }
+
   async check(userId: string, workspaceId: string | null, actionKey: string): Promise<boolean> {
     try {
       const headers: Record<string, string> = {
@@ -31,8 +48,9 @@ export class AuthzService implements IAuthzService {
         return false;
       }
 
-      const data = await response.json() as { allowed: boolean };
-      return !!data.allowed;
+      const parsed = await response.json().catch(() => null);
+      const allowed = AuthzService.extractAllowed(parsed);
+      return allowed === true;
     } catch (error) {
       console.error('Authz check failed:', error);
       return false; // Fail safe

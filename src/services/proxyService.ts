@@ -1,5 +1,6 @@
 
 import type { RouteMatch } from '../types';
+import { isClientInternalHeader } from '../security/internalHeaders';
 
 export class ProxyService {
   private serviceMap: Record<string, string>;
@@ -27,7 +28,14 @@ export class ProxyService {
     const targetUrl = new URL(finalPath, baseUrl).toString();
 
     const headers = new Headers(request.headers);
-    headers.delete('X-Internal-Service-Token');
+    // Never forward internal/security context headers from clients.
+    for (const name of Array.from(headers.keys())) {
+      const lower = name.toLowerCase();
+      if (lower === "authorization" || isClientInternalHeader(lower)) {
+        headers.delete(name);
+      }
+    }
+
     if (this.internalServiceToken) {
       headers.set('X-Internal-Service-Token', this.internalServiceToken);
     }
