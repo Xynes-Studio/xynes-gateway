@@ -32,26 +32,26 @@ export const createApp = async () => {
         id: '1',
         pathPattern: '/workspaces/:workspaceId/documents',
         method: 'POST',
-        serviceKey: 'DOC_SERVICE',
+        serviceKey: 'doc-service',
         targetPath: '/documents',
         workspaceScoped: true,
-        actionKey: 'document:create'
+        actionKey: 'docs.document.create'
       },
       {
         id: '2',
         pathPattern: '/workspaces/:workspaceId/documents/:id',
         method: 'GET',
-        serviceKey: 'DOC_SERVICE',
+        serviceKey: 'doc-service',
         targetPath: '/documents/:id',
         workspaceScoped: true,
-        actionKey: 'document:read'
+        actionKey: 'docs.document.read'
       },
       // Blog routes (GATE-4)
       {
         id: '3',
         pathPattern: '/workspaces/:workspaceId/blog',
         method: 'GET',
-        serviceKey: 'CMS_CORE',
+        serviceKey: 'cms-core',
         targetPath: '/blog',
         workspaceScoped: true,
         actionKey: 'cms.blog_entry.listPublished',
@@ -61,10 +61,31 @@ export const createApp = async () => {
         id: '4',
         pathPattern: '/workspaces/:workspaceId/blog/:slug',
         method: 'GET',
-        serviceKey: 'CMS_CORE',
+        serviceKey: 'cms-core',
         targetPath: '/blog/:slug',
         workspaceScoped: true,
         actionKey: 'cms.blog_entry.getPublishedBySlug',
+        isPublic: true
+      },
+      // Generic Content routes (ROUTES-CONTENT-1)
+      {
+        id: '7',
+        pathPattern: '/workspaces/:workspaceId/content/:routeSegment',
+        method: 'GET',
+        serviceKey: 'cms-core',
+        targetPath: '/content/:routeSegment',
+        workspaceScoped: true,
+        actionKey: 'cms.content.listPublished',
+        isPublic: true
+      },
+      {
+        id: '8',
+        pathPattern: '/workspaces/:workspaceId/content/:routeSegment/:slug',
+        method: 'GET',
+        serviceKey: 'cms-core',
+        targetPath: '/content/:routeSegment/:slug',
+        workspaceScoped: true,
+        actionKey: 'cms.content.getPublishedBySlug',
         isPublic: true
       },
       // Comment routes (GATE-4)
@@ -72,7 +93,7 @@ export const createApp = async () => {
         id: '5',
         pathPattern: '/workspaces/:workspaceId/content-entries/:entryId/comments',
         method: 'POST',
-        serviceKey: 'CMS_CORE',
+        serviceKey: 'cms-core',
         targetPath: '/content-entries/:entryId/comments',
         workspaceScoped: true,
         actionKey: 'cms.comments.create'
@@ -81,7 +102,7 @@ export const createApp = async () => {
         id: '6',
         pathPattern: '/workspaces/:workspaceId/content-entries/:entryId/comments',
         method: 'GET',
-        serviceKey: 'CMS_CORE',
+        serviceKey: 'cms-core',
         targetPath: '/content-entries/:entryId/comments',
         workspaceScoped: true,
         actionKey: 'cms.comments.listForEntry'
