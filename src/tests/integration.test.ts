@@ -15,6 +15,7 @@ vi.module('../infra/config', () => ({
     services: {
       docs: 'http://localhost:3001',
       cms: 'http://localhost:3003',
+            accounts: 'http://localhost:3005',
       authz: 'http://localhost:3002',
       telemetry: 'http://localhost:3004',
     },
@@ -127,6 +128,70 @@ describe('Gateway Integration', () => {
             })
         }));
     });
+
+        it('should proxy GET /me to accounts-service (auth required, no authz, no workspace header)', async () => {
+                const app = await createApp();
+                const token = signHs256ForTest(
+                    {
+                        sub: "user-1",
+                        email: "user-1@example.com",
+                        name: "User One",
+                        avatar_url: "https://example.com/u1.png",
+                        exp: 2_000_000_000,
+                    },
+                    "test-jwt-secret",
+                );
+
+                global.fetch = vi.fn((url: string | URL | Request, init?: RequestInit) => {
+                        const urlStr = url.toString();
+                        if (urlStr.includes('/authz/check')) {
+                                throw new Error('authz should not be called for workspaceScoped=false routes');
+                        }
+                        if (urlStr.includes('/internal/accounts-actions')) {
+                                const headers = new Headers(init?.headers);
+                                expect(headers.get('X-Internal-Service-Token')).toBe('test-internal-token');
+                                expect(headers.get('X-Workspace-Id')).toBeNull();
+                                expect(headers.get('X-XS-User-Id')).toBe('user-1');
+                                expect(headers.get('X-XS-User-Email')).toBe('user-1@example.com');
+                                expect(headers.get('X-XS-User-Name')).toBe('User One');
+                                expect(headers.get('X-XS-User-Avatar-Url')).toBe('https://example.com/u1.png');
+
+                                const body = JSON.parse(String(init?.body || '{}')) as { actionKey?: string; payload?: Record<string, unknown> };
+                                expect(body.actionKey).toBe('accounts.me.getOrCreate');
+                                expect(body.payload).toEqual({});
+
+                                return Promise.resolve(new Response(JSON.stringify({
+                                    user: { id: 'user-1', email: 'user-1@example.com', displayName: 'User One', avatarUrl: 'https://example.com/u1.png' },
+                                    workspaces: [],
+                                }), { status: 200 }));
+                        }
+                        if (urlStr.includes('/internal/telemetry-actions')) {
+                                return Promise.resolve(new Response(JSON.stringify({ id: 'evt-1' }), { status: 201 }));
+                        }
+                        return Promise.reject(new Error(`Unknown URL: ${urlStr}`));
+                }) as unknown as typeof fetch;
+
+                const res = await app.request('/me', {
+                        method: 'GET',
+                        headers: {
+                            Authorization: `Bearer ${token}`,
+                            'X-XS-User-Id': 'attacker',
+                            'X-Workspace-Id': 'attacker-workspace',
+                            'X-Internal-Service-Token': 'attacker-token',
+                        },
+                });
+
+                expect(res.status).toBe(200);
+                const body = await res.json();
+                expect(body).toEqual(expect.objectContaining({ ok: true }));
+                expect(body.data).toEqual(expect.objectContaining({ workspaces: [] }));
+        });
+
+        it('should return 401 for GET /me when Authorization is missing', async () => {
+                const app = await createApp();
+                const res = await app.request('/me', { method: 'GET' });
+                expect(res.status).toBe(401);
+        });
 
     it('should resolve and proxy public GET /workspaces/:id/content/:routeSegment to cms-core (no authz, routeSegment in payload)', async () => {
         const app = await createApp();

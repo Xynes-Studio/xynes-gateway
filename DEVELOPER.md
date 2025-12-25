@@ -62,9 +62,9 @@ We follow the platform test pyramid described in `../xynes-cms-core/docs/adr/001
 ### Environment
 
 - Docker/dev runs use `.env.dev` by default.
-- Local host runs should use `.env.localhost`:
-  - `XYNES_ENV_FILE=.env.localhost bun run dev`
-  - `XYNES_ENV_FILE=.env.localhost bun run test`
+- Local host runs should use `.env.localhsot`:
+  - `XYNES_ENV_FILE=.env.localhsot bun run dev`
+  - `XYNES_ENV_FILE=.env.localhsot bun run test`
 
 ### Setup
 
@@ -135,6 +135,7 @@ The Dynamic Router implements a "Smart Proxy" pattern:
 3. **Action Mapping**: Maps matched route to a downstream "Action" endpoint.
    - `doc-service` -> `${DOC_SERVICE_URL}/internal/doc-actions`
    - `cms-core` -> `${CMS_CORE_URL}/internal/cms-actions`
+  - `accounts-service` -> `${ACCOUNTS_SERVICE_URL}/internal/accounts-actions`
 4. **Payload Construction**: Builds a single JSON payload object by merging request JSON body + query + path params (path params win; `workspaceId` is header-only).
 5. **Telemetry**: Asynchronously records request tracking.
 
@@ -150,6 +151,18 @@ Routes can be marked as `isPublic: true` to bypass authorization checks:
 
 - If `route.isPublic === true`, the gateway skips `AuthzService.check()` and forwards the request directly.
 - If `route.isPublic === false` (or undefined), normal RBAC enforcement applies.
+
+### Non-workspace routes (ACCOUNTS-ME-1)
+
+Some routes are not workspace-scoped (e.g. `GET /me`). For these routes:
+
+- Gateway requires authentication (valid JWT → `req.auth.userId`).
+- Gateway skips authz by default when `workspaceScoped=false`.
+- Gateway forwards gateway-owned auth context headers to the downstream service:
+  - `X-XS-User-Id`
+  - `X-XS-User-Email`
+  - `X-XS-User-Name`
+  - `X-XS-User-Avatar-Url`
 
 **Current Public Routes:**
 - `GET /workspaces/:workspaceId/blog` – List published blog entries.
@@ -195,6 +208,7 @@ All API responses are wrapped in a standard envelope:
 Ensure the following environment variables are set:
 - `DOC_SERVICE_URL`: URL of the Document Service (default: `http://localhost:3001`)
 - `CMS_CORE_URL`: URL of the CMS Core Service (default: `http://localhost:3003`)
+- `ACCOUNTS_SERVICE_URL`: URL of the Accounts Service (default: `http://localhost:<port>`)
 - `AUTHZ_SERVICE_URL`: URL of the Authorization Service (default: `http://localhost:3002`)
 - `INTERNAL_SERVICE_TOKEN`: Shared secret for internal service calls (sent as `X-Internal-Service-Token`)
 - `JWT_SECRET`: HS256 JWT secret used to validate `Authorization: Bearer <JWT>` and derive `X-XS-User-Id` for protected routes

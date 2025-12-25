@@ -142,6 +142,12 @@ export class DynamicRouter {
     const name = (claims as Record<string, unknown> | null)?.name;
     if (typeof name === "string" && name.length > 0) auth.name = name;
 
+    const record = claims as Record<string, unknown> | null;
+    const avatarUrl =
+      (record?.avatar_url ?? record?.avatarUrl ?? record?.picture) as unknown;
+    if (typeof avatarUrl === "string" && avatarUrl.length > 0)
+      auth.avatarUrl = avatarUrl;
+
     request.auth = auth;
     return userId;
   }
@@ -229,6 +235,12 @@ export class DynamicRouter {
       };
     }
 
+    // For non-workspace-scoped routes, require authentication but skip authz by default.
+    // (Optional global authz can be added later behind an explicit flag.)
+    if (!route.workspaceScoped) {
+      return { authorized: true, userId };
+    }
+
     // Resolve workspaceId
     const workspaceId: string | null = params.workspaceId || null;
 
@@ -262,6 +274,9 @@ export class DynamicRouter {
     const { route, params } = match;
     const { serviceKey, actionKey } = route;
     const userId = request.auth?.userId ?? null;
+    const userEmail = request.auth?.email ?? null;
+    const userName = request.auth?.name ?? null;
+    const userAvatarUrl = request.auth?.avatarUrl ?? null;
     const startTime = Date.now();
     const reqId = requestId || generateRequestId();
 
@@ -293,6 +308,11 @@ export class DynamicRouter {
       case "cms-core":
       case "cmscore":
         serviceUrl = config.services.cms;
+        break;
+      case "accounts_service":
+      case "accounts-service":
+      case "accountsservice":
+        serviceUrl = config.services.accounts;
         break;
       default: {
         console.error(`[DynamicRouter] Unknown serviceKey: ${serviceKey}`);
@@ -327,6 +347,12 @@ export class DynamicRouter {
       serviceKeyNormalized === "cmscore"
     ) {
       actionEndpoint = `${serviceUrl}/internal/cms-actions`;
+    } else if (
+      serviceKeyNormalized === "accounts_service" ||
+      serviceKeyNormalized === "accounts-service" ||
+      serviceKeyNormalized === "accountsservice"
+    ) {
+      actionEndpoint = `${serviceUrl}/internal/accounts-actions`;
     } else {
       // Generic fallback or specific?
       actionEndpoint = `${serviceUrl}/internal/actions`;
@@ -379,6 +405,9 @@ export class DynamicRouter {
       internalServiceToken: config.internalServiceToken,
       workspaceId,
       userId,
+      userEmail,
+      userName,
+      userAvatarUrl,
       requestId: reqId,
     });
 

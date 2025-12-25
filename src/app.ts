@@ -28,6 +28,16 @@ export const createApp = async () => {
   
   // Initial Routes (Mock for now, will come from DB later)
   const initialRoutes: Route[] = [
+      // Accounts (ACCOUNTS-ME-1)
+      {
+        id: 'me-1',
+        pathPattern: '/me',
+        method: 'GET',
+        serviceKey: 'accounts-service',
+        targetPath: '/me',
+        workspaceScoped: false,
+        actionKey: 'accounts.me.getOrCreate'
+      },
       {
         id: '1',
         pathPattern: '/workspaces/:workspaceId/documents',
