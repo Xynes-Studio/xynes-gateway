@@ -338,7 +338,9 @@ describe("Gateway Integration", () => {
       }
       if (urlStr.includes("/internal/accounts-actions")) {
         const headers = new Headers(init?.headers);
-        expect(headers.get("X-Internal-Service-Token")).toBe("test-internal-token");
+        expect(headers.get("X-Internal-Service-Token")).toBe(
+          "test-internal-token"
+        );
         expect(headers.get("X-Workspace-Id")).toBeNull();
 
         const body = JSON.parse(String(init?.body || "{}")) as {
