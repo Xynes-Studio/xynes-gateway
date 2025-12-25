@@ -68,7 +68,8 @@ export function buildInternalHeaders(
     );
   if (ctx.workspaceId)
     headers.set("X-Workspace-Id", sanitizeInternalHeaderValue(ctx.workspaceId));
-  headers.set("X-XS-User-Id", sanitizeInternalHeaderValue(ctx.userId ?? ""));
+  if (ctx.userId)
+    headers.set("X-XS-User-Id", sanitizeInternalHeaderValue(ctx.userId));
 
   if (ctx.userEmail)
     headers.set("X-XS-User-Email", sanitizeInternalHeaderValue(ctx.userEmail));
