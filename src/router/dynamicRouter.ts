@@ -142,6 +142,13 @@ export class DynamicRouter {
     const name = (claims as Record<string, unknown> | null)?.name;
     if (typeof name === "string" && name.length > 0) auth.name = name;
 
+    const record = claims as Record<string, unknown> | null;
+    const avatarUrl = (record?.avatar_url ??
+      record?.avatarUrl ??
+      record?.picture) as unknown;
+    if (typeof avatarUrl === "string" && avatarUrl.length > 0)
+      auth.avatarUrl = avatarUrl;
+
     request.auth = auth;
     return userId;
   }
@@ -229,15 +236,17 @@ export class DynamicRouter {
       };
     }
 
-    // Resolve workspaceId
-    const workspaceId: string | null = params.workspaceId || null;
+    // Resolve workspaceId (null for non-workspace routes)
+    const workspaceId: string | null = route.workspaceScoped ? params.workspaceId || null : null;
 
-    // If not workspace scoped, workspaceId might be null, which is fine.
-    const allowed = await this.authzService.check(
-      userId,
-      workspaceId,
-      route.actionKey
-    );
+    // Allowlist auth-only actions that are intentionally not RBAC-protected.
+    // This avoids accidentally bypassing authz for other global (workspaceScoped=false) routes.
+    const AUTH_ONLY_ACTION_KEYS = new Set<string>(["accounts.me.getOrCreate"]);
+    if (!route.workspaceScoped && AUTH_ONLY_ACTION_KEYS.has(route.actionKey)) {
+      return { authorized: true, userId };
+    }
+
+    const allowed = await this.authzService.check(userId, workspaceId, route.actionKey);
     if (!allowed) {
       return {
         authorized: false,
@@ -262,6 +271,9 @@ export class DynamicRouter {
     const { route, params } = match;
     const { serviceKey, actionKey } = route;
     const userId = request.auth?.userId ?? null;
+    const userEmail = request.auth?.email ?? null;
+    const userName = request.auth?.name ?? null;
+    const userAvatarUrl = request.auth?.avatarUrl ?? null;
     const startTime = Date.now();
     const reqId = requestId || generateRequestId();
 
@@ -293,6 +305,11 @@ export class DynamicRouter {
       case "cms-core":
       case "cmscore":
         serviceUrl = config.services.cms;
+        break;
+      case "accounts_service":
+      case "accounts-service":
+      case "accountsservice":
+        serviceUrl = config.services.accounts;
         break;
       default: {
         console.error(`[DynamicRouter] Unknown serviceKey: ${serviceKey}`);
@@ -327,6 +344,12 @@ export class DynamicRouter {
       serviceKeyNormalized === "cmscore"
     ) {
       actionEndpoint = `${serviceUrl}/internal/cms-actions`;
+    } else if (
+      serviceKeyNormalized === "accounts_service" ||
+      serviceKeyNormalized === "accounts-service" ||
+      serviceKeyNormalized === "accountsservice"
+    ) {
+      actionEndpoint = `${serviceUrl}/internal/accounts-actions`;
     } else {
       // Generic fallback or specific?
       actionEndpoint = `${serviceUrl}/internal/actions`;
@@ -379,6 +402,9 @@ export class DynamicRouter {
       internalServiceToken: config.internalServiceToken,
       workspaceId,
       userId,
+      userEmail,
+      userName,
+      userAvatarUrl,
       requestId: reqId,
     });
 

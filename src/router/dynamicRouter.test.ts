@@ -14,6 +14,7 @@ vi.module("../infra/config", () => ({
     services: {
       docs: "http://localhost:3001",
       cms: "http://localhost:3003",
+      accounts: "http://localhost:3005",
       authz: "http://localhost:3002",
       telemetry: "http://localhost:3004",
     },
@@ -230,8 +231,8 @@ describe("DynamicRouter", () => {
       expect(mockAuthzService.check).not.toHaveBeenCalled();
     });
 
-    it("should pass null workspaceId if route is NOT workspaceScoped", async () => {
-      // Create a fake route that is protected (has actionKey) but NOT workspaceScoped
+    it("should call authz for protected route when workspaceScoped=false (workspaceId=null)", async () => {
+      // Non-workspace routes are still RBAC-protected unless explicitly allowlisted.
       const globalRoute: Route = {
         id: "global-1",
         pathPattern: "/admin/settings",
@@ -244,7 +245,6 @@ describe("DynamicRouter", () => {
       const match = { route: globalRoute, params: {} };
 
       (mockAuthzService.check as unknown as MockFn).mockResolvedValue(true);
-
       const token = signHs256ForTest(
         { sub: "admin-user", exp: 2_000_000_000 },
         "test-jwt-secret"
@@ -258,17 +258,38 @@ describe("DynamicRouter", () => {
 
       expect(result).toEqual({ authorized: true, userId: "admin-user" });
       expect(req.auth?.userId).toBe("admin-user");
-      // Expect workspaceId to be null (or undefined depending on implementation, let's say null/undefined)
-      // Checking call arguments
-      const calls = (mockAuthzService.check as unknown as MockFn).mock.calls;
-      expect(calls.length).toBeGreaterThan(0);
-      const args = calls[0];
-      expect(args).toBeDefined();
-      if (args) {
-        expect(args[0]).toBe("admin-user");
-        expect(args[1]).toBeNull(); // workspaceId
-        expect(args[2]).toBe("admin:write");
-      }
+      expect(mockAuthzService.check).toHaveBeenCalledWith(
+        "admin-user",
+        null,
+        "admin:write"
+      );
+    });
+
+    it("should skip authz for /me action when workspaceScoped=false", async () => {
+      const meRoute: Route = {
+        id: "me-1",
+        pathPattern: "/me",
+        method: "GET",
+        serviceKey: "accounts-service",
+        targetPath: "/me",
+        workspaceScoped: false,
+        actionKey: "accounts.me.getOrCreate",
+      };
+      const match = { route: meRoute, params: {} };
+
+      const token = signHs256ForTest(
+        { sub: "user-1", exp: 2_000_000_000 },
+        "test-jwt-secret"
+      );
+      const req = new Request("http://localhost/me", {
+        method: "GET",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+
+      const result = await router.authorize(match as RouteMatch, req);
+
+      expect(result).toEqual({ authorized: true, userId: "user-1" });
+      expect(mockAuthzService.check).not.toHaveBeenCalled();
     });
   });
   describe("proxyRequest", () => {
