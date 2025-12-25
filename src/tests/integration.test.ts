@@ -323,9 +323,11 @@ describe("Gateway Integration", () => {
       const urlStr = url.toString();
       if (urlStr.includes("/authz/check")) {
         const body = JSON.parse(String(init?.body || "{}")) as {
+          userId?: string;
           workspaceId?: string | null;
           actionKey?: string;
         };
+        expect(body.userId).toBe("user-1");
         expect(body.workspaceId).toBeNull();
         expect(body.actionKey).toBe("accounts.workspaces.create");
         return Promise.resolve(
@@ -336,6 +338,7 @@ describe("Gateway Integration", () => {
       }
       if (urlStr.includes("/internal/accounts-actions")) {
         const headers = new Headers(init?.headers);
+        expect(headers.get("X-Internal-Service-Token")).toBe("test-internal-token");
         expect(headers.get("X-Workspace-Id")).toBeNull();
 
         const body = JSON.parse(String(init?.body || "{}")) as {
