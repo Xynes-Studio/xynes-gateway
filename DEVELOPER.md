@@ -143,7 +143,7 @@ The Dynamic Router implements a "Smart Proxy" pattern:
 
 - `X-XS-User-Id`, `X-Workspace-Id`, and `X-Internal-Service-Token` are **internal-only** headers set by the gateway.
 - Any client-sent `X-XS-*`, `X-Internal-*`, `X-Workspace-Id`, or `X-Internal-Service-Token` values are ignored/overwritten and never forwarded to internal services.
-- The gateway always sends `X-XS-User-Id` to internal services; for anonymous/public requests it is an empty string.
+- The gateway sends `X-XS-User-Id` only when the request is authenticated; for anonymous/public requests it is **omitted**.
 
 ### Public Routes (GATE-6)
 
@@ -169,6 +169,19 @@ Some routes are not workspace-scoped (e.g. `GET /me`). For these routes:
 - `GET /workspaces/:workspaceId/blog/:slug` – Get published blog entry by slug.
 - `GET /workspaces/:workspaceId/content/:routeSegment` – Generic published content listing (template-driven).
 - `GET /workspaces/:workspaceId/content/:routeSegment/:slug` – Generic published content by slug (template-driven).
+- `GET /workspace-invites/:token` – Resolve a workspace invite by token (INVITES-CORE-1).
+
+### Workspace Invites (INVITES-CORE-1)
+
+- `POST /workspaces/:workspaceId/invites` → `accounts.invites.create`
+  - Auth required; workspace-scoped
+  - RBAC enforced via authz service
+- `GET /workspace-invites/:token` → `accounts.invites.resolve`
+  - Public (no auth / no authz)
+  - `token` is forwarded as a payload field (never as an internal header)
+- `POST /workspace-invites/:token/accept` → `accounts.invites.accept`
+  - Auth required, but intentionally **not** RBAC-protected (invite token is the authority)
+  - Included in the gateway auth-only allowlist to avoid inadvertently bypassing authz for other global routes
 
 ### Generic Content API (ROUTES-CONTENT-1)
 

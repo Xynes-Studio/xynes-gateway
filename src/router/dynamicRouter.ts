@@ -237,16 +237,25 @@ export class DynamicRouter {
     }
 
     // Resolve workspaceId (null for non-workspace routes)
-    const workspaceId: string | null = route.workspaceScoped ? params.workspaceId || null : null;
+    const workspaceId: string | null = route.workspaceScoped
+      ? params.workspaceId || null
+      : null;
 
     // Allowlist auth-only actions that are intentionally not RBAC-protected.
     // This avoids accidentally bypassing authz for other global (workspaceScoped=false) routes.
-    const AUTH_ONLY_ACTION_KEYS = new Set<string>(["accounts.me.getOrCreate"]);
+    const AUTH_ONLY_ACTION_KEYS = new Set<string>([
+      "accounts.me.getOrCreate",
+      "accounts.invites.accept",
+    ]);
     if (!route.workspaceScoped && AUTH_ONLY_ACTION_KEYS.has(route.actionKey)) {
       return { authorized: true, userId };
     }
 
-    const allowed = await this.authzService.check(userId, workspaceId, route.actionKey);
+    const allowed = await this.authzService.check(
+      userId,
+      workspaceId,
+      route.actionKey
+    );
     if (!allowed) {
       return {
         authorized: false,

@@ -402,7 +402,7 @@ describe("Gateway Integration", () => {
           "test-internal-token"
         );
         expect(headers.get("X-Workspace-Id")).toBe("workspace-1");
-        expect(headers.get("X-XS-User-Id")).toBe("");
+        expect(headers.get("X-XS-User-Id")).toBeNull();
 
         const body = JSON.parse(String(init?.body || "{}")) as {
           actionKey?: string;
