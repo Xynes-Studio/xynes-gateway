@@ -25,6 +25,32 @@ The gateway is built using Bun and Hono. It acts as the entry point for all Xyne
 - **Linting**: Keep code clean.
 - **Security**: Do not persist secrets in logs/telemetry. Never emit raw URL query strings to telemetry.
 
+#### Global Standards (detailed)
+
+These conventions are enforced to keep the gateway consistent with broader platform standards (similar intent to “Next.js/React” team standards: predictable structure, strong boundaries, low coupling).
+
+- **Folder segregation (keep boundaries tight)**
+  - `src/router/**`: request matching, authorization orchestration, proxying decisions.
+  - `src/security/**`: header ownership rules, JWKS URL policy, startup security warnings.
+  - `src/utils/**`: pure helpers (JWT verification, URL sanitation, request IDs, error mapping).
+  - `src/services/**`: outbound integrations (authz, telemetry, downstream proxy helpers).
+  - `src/middleware/**`: Hono middleware only (logging, error handling, request IDs).
+  - `src/tests/**`: integration/stack tests (unit tests stay colocated as `*.test.ts`).
+
+- **Auth context propagation (GATEWAY-AUTH-2)**
+  - Gateway treats Supabase (or configured JWT authority) as the source of truth.
+  - After JWT verification, the gateway sets `req.auth.userId` from the JWT `sub` claim.
+  - Internal calls must derive `X-XS-User-Id` from `req.auth.userId` only; client-sent `X-XS-*` headers are never trusted.
+
+- **Security-by-default**
+  - JWT validation enforces signature + `exp`/`nbf`.
+  - `iss`/`aud` are enforced when configured; prefer enabling `JWT_REQUIRE_ISS_AUD_IN_PROD=1` in production.
+  - JWKS fetching is fail-closed with strict URL policy and no redirects.
+
+- **TDD + Coverage**
+  - Implement changes test-first whenever possible: unit tests for pure helpers, integration/stack tests for gateway behavior.
+  - Coverage target for gateway is **80%+** (run `bun run coverage`).
+
 ### Testing Strategy (ADR-aligned)
 
 We follow the platform test pyramid described in `../xynes-cms-core/docs/adr/001-testing-strategy.md`, adapted for the gateway:
@@ -35,7 +61,8 @@ We follow the platform test pyramid described in `../xynes-cms-core/docs/adr/001
 
 ### Environment
 
-- Scripts load `.env.dev` by default (Docker/dev). Override for host runs:
+- Docker/dev runs use `.env.dev` by default.
+- Local host runs should use `.env.localhost`:
   - `XYNES_ENV_FILE=.env.localhost bun run dev`
   - `XYNES_ENV_FILE=.env.localhost bun run test`
 
@@ -176,3 +203,13 @@ Ensure the following environment variables are set:
 - `JWT_REQUIRE_ISS_AUD_IN_PROD`: Optional guard. When set to `1`/`true`, gateway refuses to start in `NODE_ENV=production` unless both `JWT_ISSUER` and `JWT_AUDIENCE` are set.
 - `JWT_PUBLIC_KEY`: Optional PEM public key for RS256 validation (alternative to `JWT_JWKS_URL`)
 - `JWT_JWKS_URL`: Optional JWKS URL for RS256 validation. When set, the gateway fetches and caches JWKS in-memory with a TTL; only `https://` URLs are allowed and redirects are rejected. Hostnames must not be `localhost` or a private IP literal (note: DNS resolution is not performed, so ensure your hostname cannot resolve to private IPs).
+
+#### Supabase Auth (GATEWAY-AUTH-2)
+
+To use Supabase as the JWT authority (recommended), configure RS256 validation via Supabase JWKS:
+
+- `JWT_JWKS_URL`: `https://<project-ref>.supabase.co/auth/v1/keys`
+- `JWT_ISSUER`: typically `https://<project-ref>.supabase.co/auth/v1` (use the exact `iss` your tokens contain)
+- `JWT_AUDIENCE`: optional; set only if your project uses a specific `aud` (when set, gateway enforces it)
+
+On successful validation, the gateway derives `userId` from the JWT `sub` claim and propagates it internally as `X-XS-User-Id`.

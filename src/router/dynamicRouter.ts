@@ -8,12 +8,15 @@ import { createSuccessResponse, createErrorResponse } from '../types/envelope';
 import { generateRequestId } from '../utils/requestId';
 import { mapStatusToErrorCode, extractErrorFromBody, getDefaultMessageForCode } from '../utils/errorMapper';
 import { buildInternalHeaders } from '../security/internalHeaders';
-import { extractBearerToken, verifyJwt } from '../utils/jwt';
+import { extractBearerToken, verifyJwt, type JwtClaims } from '../utils/jwt';
 import { getPathnameFromUrlOrPath } from '../utils/url';
+import type { RequestAuth } from '../types/requestAuth';
 
 export class DynamicRouter {
   private routes: Route[];
   private authzService: IAuthzService;
+
+  private static readonly AUTH_RESULT = Symbol("xynes.gateway.authResult");
 
   constructor(routes: Route[], authzService: IAuthzService) {
     this.routes = routes;
@@ -111,19 +114,49 @@ export class DynamicRouter {
   /**
    * Authorizes the request using AuthzService
    */
-  private async getAuthenticatedUserId(request: Request): Promise<string | null> {
-    const token = extractBearerToken(request.headers.get("Authorization"));
-    if (!token) return null;
-    const claims = await verifyJwt(token, {
-      hs256Secret: config.auth?.jwtSecret,
-      issuer: config.auth?.jwtIssuer,
-      audience: config.auth?.jwtAudience,
-      publicKeyPem: config.auth?.jwtPublicKey,
-      jwksUrl: config.auth?.jwksUrl,
-    });
-    return typeof claims?.sub === "string" && claims.sub.length > 0
-      ? claims.sub
-      : null;
+  private static attachRequestAuth(request: Request, claims: JwtClaims | null): string | null {
+    const userId = typeof claims?.sub === "string" && claims.sub.length > 0 ? claims.sub : null;
+
+    const auth: RequestAuth = {
+      userId: userId ?? undefined,
+    };
+
+    const email = (claims as Record<string, unknown> | null)?.email;
+    if (typeof email === "string" && email.length > 0) auth.email = email;
+
+    const name = (claims as Record<string, unknown> | null)?.name;
+    if (typeof name === "string" && name.length > 0) auth.name = name;
+
+    request.auth = auth;
+    return userId;
+  }
+
+  private async getAuthResult(request: Request): Promise<{ userId: string | null; claims: JwtClaims | null }> {
+    const holder = request as unknown as Record<symbol, Promise<{ userId: string | null; claims: JwtClaims | null }> | undefined>;
+    const existing = holder[DynamicRouter.AUTH_RESULT];
+    if (existing) return await existing;
+
+    const pending = (async (): Promise<{ userId: string | null; claims: JwtClaims | null }> => {
+      const token = extractBearerToken(request.headers.get("Authorization"));
+      if (!token) {
+        const userId = DynamicRouter.attachRequestAuth(request, null);
+        return { userId, claims: null };
+      }
+
+      const claims = await verifyJwt(token, {
+        hs256Secret: config.auth?.jwtSecret,
+        issuer: config.auth?.jwtIssuer,
+        audience: config.auth?.jwtAudience,
+        publicKeyPem: config.auth?.jwtPublicKey,
+        jwksUrl: config.auth?.jwksUrl,
+      });
+
+      const userId = DynamicRouter.attachRequestAuth(request, claims);
+      return { userId, claims };
+    })();
+
+    holder[DynamicRouter.AUTH_RESULT] = pending;
+    return await pending;
   }
 
   async authorize(
@@ -150,15 +183,17 @@ export class DynamicRouter {
 
     // If no actionKey, it's public (or at least not RBAC protected by this gate)
     if (!route.actionKey) {
-      return { authorized: true, userId: await this.getAuthenticatedUserId(request) };
+      const { userId } = await this.getAuthResult(request);
+      return { authorized: true, userId };
     }
 
     // If route is explicitly public, skip authz
     if (route.isPublic) {
-      return { authorized: true, userId: await this.getAuthenticatedUserId(request) };
+      const { userId } = await this.getAuthResult(request);
+      return { authorized: true, userId };
     }
 
-    const userId = await this.getAuthenticatedUserId(request);
+    const { userId } = await this.getAuthResult(request);
     if (!userId) {
       console.warn(
         `[DynamicRouter] Blocked request to ${route.pathPattern}: Missing/invalid Authorization token`,
@@ -195,11 +230,11 @@ export class DynamicRouter {
     match: RouteMatch,
     request: Request,
     query: Record<string, string>,
-    userId: string | null,
     requestId?: string,
   ): Promise<Response> {
     const { route, params } = match;
     const { serviceKey, actionKey } = route;
+    const userId = request.auth?.userId ?? null;
     const startTime = Date.now();
     const reqId = requestId || generateRequestId();
 
@@ -381,7 +416,8 @@ export class DynamicRouter {
               return c.json(errorResponse, auth.status);
           }
           
-          const response = await this.proxyRequest(match, c.req.raw, c.req.query(), auth.userId, requestId);
+        // `authorize()` attaches `req.auth.userId` (when present). Proxy must rely on `req.auth.userId`.
+        const response = await this.proxyRequest(match, c.req.raw, c.req.query(), requestId);
           return response;
       }
       

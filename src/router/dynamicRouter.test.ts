@@ -152,6 +152,7 @@ describe('DynamicRouter', () => {
       const result = await router.authorize(match!, req);
       
       expect(result).toEqual({ authorized: true, userId: "user-1" });
+      expect(req.auth?.userId).toBe("user-1");
       expect(mockAuthzService.check).toHaveBeenCalledWith('user-1', '123', 'docs.document.create');
     });
 
@@ -172,6 +173,7 @@ describe('DynamicRouter', () => {
         const result = await router.authorize(match!, req);
         
         expect(result).toEqual(expect.objectContaining({ authorized: false, status: 403 }));
+        expect(req.auth?.userId).toBe('user-2');
         expect(mockAuthzService.check).toHaveBeenCalledWith('user-2', '123', 'docs.document.read');
     });
 
@@ -185,6 +187,7 @@ describe('DynamicRouter', () => {
 
         const result = await router.authorize(match!, req);
         expect(result).toEqual(expect.objectContaining({ authorized: false, status: 401 }));
+        expect(req.auth?.userId).toBeUndefined();
     });
 
     // New tests for workspaceScoped logic
@@ -226,6 +229,7 @@ describe('DynamicRouter', () => {
         const result = await router.authorize(match as RouteMatch, req);
 
         expect(result).toEqual({ authorized: true, userId: "admin-user" });
+        expect(req.auth?.userId).toBe("admin-user");
         // Expect workspaceId to be null (or undefined depending on implementation, let's say null/undefined)
         // Checking call arguments
         const calls = (mockAuthzService.check as unknown as MockFn).mock.calls;
@@ -258,10 +262,11 @@ describe('DynamicRouter', () => {
             },
             body: JSON.stringify({ title: 'New Doc' })
         });
+        (req as unknown as { auth?: { userId?: string } }).auth = { userId: 'user-1' };
 
         (global.fetch as unknown as MockFn).mockResolvedValue(new Response('{"id":"doc-1"}', { status: 201 }));
 
-        const response = await router.proxyRequest(match, req, {}, 'user-1');
+        const response = await router.proxyRequest(match, req, {});
         
         expect(global.fetch).toHaveBeenCalledWith(
             'http://localhost:3001/internal/doc-actions',
@@ -309,10 +314,11 @@ describe('DynamicRouter', () => {
                 'X-XS-User-Id': 'attacker'
             }
         });
+        (req as unknown as { auth?: { userId?: string } }).auth = { userId: 'user-1' };
 
         (global.fetch as unknown as MockFn).mockResolvedValue(new Response('{"id":"456"}', { status: 200 }));
 
-        await router.proxyRequest(match, req, { version: 'v1' }, 'user-1');
+        await router.proxyRequest(match, req, { version: 'v1' });
         
          const callArgs = (global.fetch as unknown as MockFn).mock.calls[0];
          if (!callArgs) throw new Error('Fetch not called');
@@ -329,7 +335,7 @@ describe('DynamicRouter', () => {
         const match = { route: badRoute, params: {} };
         const req = new Request('http://localhost/oops');
         
-        const response = await router.proxyRequest(match, req, {}, null);
+      const response = await router.proxyRequest(match, req, {});
         expect(response.status).toBe(500);
     });
 
@@ -340,7 +346,7 @@ describe('DynamicRouter', () => {
 
         (global.fetch as unknown as MockFn).mockRejectedValue(new Error('Network error'));
 
-        const response = await router.proxyRequest(match, req, {}, null);
+        const response = await router.proxyRequest(match, req, {});
         expect(response.status).toBe(502);
     });
 
@@ -349,7 +355,7 @@ describe('DynamicRouter', () => {
         const match = { route, params: {} };
         const req = new Request('http://localhost/oops');
         
-        const response = await router.proxyRequest(match, req, {}, null);
+      const response = await router.proxyRequest(match, req, {});
         expect(response.status).toBe(502);
     });
 
@@ -366,7 +372,7 @@ describe('DynamicRouter', () => {
 
         (global.fetch as unknown as MockFn).mockResolvedValue(new Response('{}', { status: 200 }));
 
-        await router.proxyRequest(match, req, {}, null);
+        await router.proxyRequest(match, req, {});
         
         // Should proceed with empty body
         const callArgs = (global.fetch as unknown as MockFn).mock.calls[0];
@@ -383,6 +389,7 @@ describe('DynamicRouter', () => {
              method: 'POST',
              headers: { 'X-XS-User-Id': 'attacker' }
         });
+           (req as unknown as { auth?: { userId?: string } }).auth = { userId: 'user-1' };
 
         // Mock fetch to handle both calls
         (global.fetch as unknown as MockFn).mockImplementation(async (url) => {
@@ -395,7 +402,7 @@ describe('DynamicRouter', () => {
             return new Response('Not Found', { status: 404 });
         });
 
-        await router.proxyRequest(match, req, {}, 'user-1');
+        await router.proxyRequest(match, req, {});
         
         // Wait for fire-and-forget telemetry
         await new Promise(resolve => setTimeout(resolve, 0));
@@ -439,7 +446,7 @@ describe('DynamicRouter', () => {
             return new Response('Not Found', { status: 404 });
         });
 
-        const response = await router.proxyRequest(match, req, {}, null);
+        const response = await router.proxyRequest(match, req, {});
         expect(response.status).toBe(500);
 
         await new Promise(resolve => setTimeout(resolve, 0));
@@ -466,7 +473,7 @@ describe('DynamicRouter', () => {
             return new Response('Not Found', { status: 404 });
         });
 
-        const response = await router.proxyRequest(match, req, {}, null);
+        const response = await router.proxyRequest(match, req, {});
         expect(response.status).toBe(201); // Main request succeeds
 
         await new Promise(resolve => setTimeout(resolve, 0));
