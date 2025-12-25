@@ -40,6 +40,25 @@ export const createApp = async () => {
       workspaceScoped: false,
       actionKey: "accounts.me.getOrCreate",
     },
+    // Workspaces (WORKSPACES-CORE-1)
+    {
+      id: "workspaces-1",
+      pathPattern: "/workspaces",
+      method: "GET",
+      serviceKey: "accounts-service",
+      targetPath: "/workspaces",
+      workspaceScoped: false,
+      actionKey: "accounts.workspaces.listForUser",
+    },
+    {
+      id: "workspaces-2",
+      pathPattern: "/workspaces",
+      method: "POST",
+      serviceKey: "accounts-service",
+      targetPath: "/workspaces",
+      workspaceScoped: false,
+      actionKey: "accounts.workspaces.create",
+    },
     {
       id: "1",
       pathPattern: "/workspaces/:workspaceId/documents",
