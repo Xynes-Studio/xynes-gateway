@@ -241,6 +241,148 @@ describe("Gateway Integration", () => {
     expect(res.status).toBe(401);
   });
 
+  it("should proxy GET /workspaces to accounts-service (auth required, authz called with workspaceId=null)", async () => {
+    const app = await createApp();
+    const token = signHs256ForTest(
+      { sub: "user-1", exp: 2_000_000_000 },
+      "test-jwt-secret"
+    );
+
+    global.fetch = vi.fn((url: string | URL | Request, init?: RequestInit) => {
+      const urlStr = url.toString();
+      if (urlStr.includes("/authz/check")) {
+        const headers = new Headers(init?.headers);
+        expect(headers.get("X-Internal-Service-Token")).toBe(
+          "test-internal-token"
+        );
+        const body = JSON.parse(String(init?.body || "{}")) as {
+          userId?: string;
+          workspaceId?: string | null;
+          actionKey?: string;
+        };
+        expect(body.userId).toBe("user-1");
+        expect(body.workspaceId).toBeNull();
+        expect(body.actionKey).toBe("accounts.workspaces.listForUser");
+        return Promise.resolve(
+          new Response(JSON.stringify({ ok: true, data: { allowed: true } }), {
+            status: 200,
+          })
+        );
+      }
+      if (urlStr.includes("/internal/accounts-actions")) {
+        const headers = new Headers(init?.headers);
+        expect(headers.get("X-Internal-Service-Token")).toBe(
+          "test-internal-token"
+        );
+        expect(headers.get("X-Workspace-Id")).toBeNull();
+        expect(headers.get("X-XS-User-Id")).toBe("user-1");
+
+        const body = JSON.parse(String(init?.body || "{}")) as {
+          actionKey?: string;
+          payload?: Record<string, unknown>;
+        };
+        expect(body.actionKey).toBe("accounts.workspaces.listForUser");
+        expect(body.payload).toEqual({});
+
+        return Promise.resolve(
+          new Response(JSON.stringify({ workspaces: [] }), { status: 200 })
+        );
+      }
+      if (urlStr.includes("/internal/telemetry-actions")) {
+        return Promise.resolve(
+          new Response(JSON.stringify({ id: "evt-1" }), { status: 201 })
+        );
+      }
+      return Promise.reject(new Error(`Unknown URL: ${urlStr}`));
+    }) as unknown as typeof fetch;
+
+    const res = await app.request("/workspaces", {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "X-XS-User-Id": "attacker",
+        "X-Workspace-Id": "attacker-workspace",
+        "X-Internal-Service-Token": "attacker-token",
+      },
+    });
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body).toEqual(expect.objectContaining({ ok: true }));
+    expect(body.data).toEqual({ workspaces: [] });
+  });
+
+  it("should proxy POST /workspaces to accounts-service (auth required, authz called with workspaceId=null)", async () => {
+    const app = await createApp();
+    const token = signHs256ForTest(
+      { sub: "user-1", exp: 2_000_000_000 },
+      "test-jwt-secret"
+    );
+
+    global.fetch = vi.fn((url: string | URL | Request, init?: RequestInit) => {
+      const urlStr = url.toString();
+      if (urlStr.includes("/authz/check")) {
+        const body = JSON.parse(String(init?.body || "{}")) as {
+          workspaceId?: string | null;
+          actionKey?: string;
+        };
+        expect(body.workspaceId).toBeNull();
+        expect(body.actionKey).toBe("accounts.workspaces.create");
+        return Promise.resolve(
+          new Response(JSON.stringify({ ok: true, data: { allowed: true } }), {
+            status: 200,
+          })
+        );
+      }
+      if (urlStr.includes("/internal/accounts-actions")) {
+        const headers = new Headers(init?.headers);
+        expect(headers.get("X-Workspace-Id")).toBeNull();
+
+        const body = JSON.parse(String(init?.body || "{}")) as {
+          actionKey?: string;
+          payload?: Record<string, unknown>;
+        };
+        expect(body.actionKey).toBe("accounts.workspaces.create");
+        expect(body.payload).toEqual({ name: "Acme", slug: "acme" });
+
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              id: "ws-1",
+              name: "Acme",
+              slug: "acme",
+              planType: "free",
+              createdBy: "user-1",
+            }),
+            { status: 201 }
+          )
+        );
+      }
+      if (urlStr.includes("/internal/telemetry-actions")) {
+        return Promise.resolve(
+          new Response(JSON.stringify({ id: "evt-1" }), { status: 201 })
+        );
+      }
+      return Promise.reject(new Error(`Unknown URL: ${urlStr}`));
+    }) as unknown as typeof fetch;
+
+    const res = await app.request("/workspaces", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ name: "Acme", slug: "acme" }),
+    });
+
+    expect(res.status).toBe(201);
+    const body = await res.json();
+    expect(body).toEqual(expect.objectContaining({ ok: true }));
+    expect(body.data).toEqual(
+      expect.objectContaining({ id: "ws-1", name: "Acme", slug: "acme" })
+    );
+  });
+
   it("should resolve and proxy public GET /workspaces/:id/content/:routeSegment to cms-core (no authz, routeSegment in payload)", async () => {
     const app = await createApp();
 
