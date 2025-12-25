@@ -62,9 +62,9 @@ We follow the platform test pyramid described in `../xynes-cms-core/docs/adr/001
 ### Environment
 
 - Docker/dev runs use `.env.dev` by default.
-- Local host runs should use `.env.localhsot`:
-  - `XYNES_ENV_FILE=.env.localhsot bun run dev`
-  - `XYNES_ENV_FILE=.env.localhsot bun run test`
+- Local host runs should use `.env.localhost`:
+  - `XYNES_ENV_FILE=.env.localhost bun run dev`
+  - `XYNES_ENV_FILE=.env.localhost bun run test`
 
 ### Setup
 
@@ -157,7 +157,7 @@ Routes can be marked as `isPublic: true` to bypass authorization checks:
 Some routes are not workspace-scoped (e.g. `GET /me`). For these routes:
 
 - Gateway requires authentication (valid JWT → `req.auth.userId`).
-- Gateway skips authz by default when `workspaceScoped=false`.
+- Gateway skips authz only for explicitly allowlisted auth-only actions (currently `accounts.me.getOrCreate`).
 - Gateway forwards gateway-owned auth context headers to the downstream service:
   - `X-XS-User-Id`
   - `X-XS-User-Email`

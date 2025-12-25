@@ -236,21 +236,17 @@ export class DynamicRouter {
       };
     }
 
-    // For non-workspace-scoped routes, require authentication but skip authz by default.
-    // (Optional global authz can be added later behind an explicit flag.)
-    if (!route.workspaceScoped) {
+    // Resolve workspaceId (null for non-workspace routes)
+    const workspaceId: string | null = route.workspaceScoped ? params.workspaceId || null : null;
+
+    // Allowlist auth-only actions that are intentionally not RBAC-protected.
+    // This avoids accidentally bypassing authz for other global (workspaceScoped=false) routes.
+    const AUTH_ONLY_ACTION_KEYS = new Set<string>(["accounts.me.getOrCreate"]);
+    if (!route.workspaceScoped && AUTH_ONLY_ACTION_KEYS.has(route.actionKey)) {
       return { authorized: true, userId };
     }
 
-    // Resolve workspaceId
-    const workspaceId: string | null = params.workspaceId || null;
-
-    // If not workspace scoped, workspaceId might be null, which is fine.
-    const allowed = await this.authzService.check(
-      userId,
-      workspaceId,
-      route.actionKey
-    );
+    const allowed = await this.authzService.check(userId, workspaceId, route.actionKey);
     if (!allowed) {
       return {
         authorized: false,

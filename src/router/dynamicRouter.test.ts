@@ -231,9 +231,8 @@ describe("DynamicRouter", () => {
       expect(mockAuthzService.check).not.toHaveBeenCalled();
     });
 
-    it("should skip authz for protected route when workspaceScoped=false", async () => {
-      // Create a fake route that is protected (has actionKey) but NOT workspaceScoped.
-      // Current policy: require auth, but skip authz for non-scoped routes.
+    it("should call authz for protected route when workspaceScoped=false (workspaceId=null)", async () => {
+      // Non-workspace routes are still RBAC-protected unless explicitly allowlisted.
       const globalRoute: Route = {
         id: "global-1",
         pathPattern: "/admin/settings",
@@ -245,6 +244,7 @@ describe("DynamicRouter", () => {
       };
       const match = { route: globalRoute, params: {} };
 
+      (mockAuthzService.check as unknown as MockFn).mockResolvedValue(true);
       const token = signHs256ForTest(
         { sub: "admin-user", exp: 2_000_000_000 },
         "test-jwt-secret"
@@ -258,6 +258,37 @@ describe("DynamicRouter", () => {
 
       expect(result).toEqual({ authorized: true, userId: "admin-user" });
       expect(req.auth?.userId).toBe("admin-user");
+      expect(mockAuthzService.check).toHaveBeenCalledWith(
+        "admin-user",
+        null,
+        "admin:write"
+      );
+    });
+
+    it("should skip authz for /me action when workspaceScoped=false", async () => {
+      const meRoute: Route = {
+        id: "me-1",
+        pathPattern: "/me",
+        method: "GET",
+        serviceKey: "accounts-service",
+        targetPath: "/me",
+        workspaceScoped: false,
+        actionKey: "accounts.me.getOrCreate",
+      };
+      const match = { route: meRoute, params: {} };
+
+      const token = signHs256ForTest(
+        { sub: "user-1", exp: 2_000_000_000 },
+        "test-jwt-secret"
+      );
+      const req = new Request("http://localhost/me", {
+        method: "GET",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+
+      const result = await router.authorize(match as RouteMatch, req);
+
+      expect(result).toEqual({ authorized: true, userId: "user-1" });
       expect(mockAuthzService.check).not.toHaveBeenCalled();
     });
   });
