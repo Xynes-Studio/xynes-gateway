@@ -1,12 +1,17 @@
-
-import type { RouteMatch } from '../types';
-import { isClientInternalHeader, sanitizeInternalHeaderValue } from '../security/internalHeaders';
+import type { RouteMatch } from "../types";
+import {
+  isClientInternalHeader,
+  sanitizeInternalHeaderValue,
+} from "../security/internalHeaders";
 
 export class ProxyService {
   private serviceMap: Record<string, string>;
   private internalServiceToken?: string;
 
-  constructor(serviceMap: Record<string, string>, internalServiceToken?: string) {
+  constructor(
+    serviceMap: Record<string, string>,
+    internalServiceToken?: string
+  ) {
     this.serviceMap = serviceMap;
     this.internalServiceToken = internalServiceToken;
   }
@@ -14,7 +19,7 @@ export class ProxyService {
   async proxyRequest(
     request: Request,
     match: RouteMatch,
-    ctx: { userId?: string | null } = {},
+    ctx: { userId?: string | null } = {}
   ): Promise<Response> {
     const { route, params } = match;
     const baseUrl = this.serviceMap[route.serviceKey];
@@ -40,25 +45,30 @@ export class ProxyService {
       }
     }
 
-    headers.set("X-XS-User-Id", sanitizeInternalHeaderValue(ctx.userId ?? ""));
+    if (ctx.userId) {
+      headers.set("X-XS-User-Id", sanitizeInternalHeaderValue(ctx.userId));
+    }
     if (this.internalServiceToken) {
       headers.set(
         "X-Internal-Service-Token",
-        sanitizeInternalHeaderValue(this.internalServiceToken),
+        sanitizeInternalHeaderValue(this.internalServiceToken)
       );
     }
     if (route.workspaceScoped && params.workspaceId) {
-      headers.set("X-Workspace-Id", sanitizeInternalHeaderValue(params.workspaceId));
+      headers.set(
+        "X-Workspace-Id",
+        sanitizeInternalHeaderValue(params.workspaceId)
+      );
     }
 
     // Remove host header to avoid conflicts
-    headers.delete('host');
+    headers.delete("host");
 
     return fetch(targetUrl, {
       method: route.method,
       headers,
       body: request.body,
-      duplex: 'half'
+      duplex: "half",
     });
   }
 }
