@@ -45,7 +45,7 @@ export interface InternalHeaderContext {
 
 export function buildInternalHeaders(
   clientHeaders: Headers,
-  ctx: InternalHeaderContext,
+  ctx: InternalHeaderContext
 ): Headers {
   const headers = new Headers();
 
@@ -64,7 +64,7 @@ export function buildInternalHeaders(
   if (ctx.internalServiceToken)
     headers.set(
       "X-Internal-Service-Token",
-      sanitizeInternalHeaderValue(ctx.internalServiceToken),
+      sanitizeInternalHeaderValue(ctx.internalServiceToken)
     );
   if (ctx.workspaceId)
     headers.set("X-Workspace-Id", sanitizeInternalHeaderValue(ctx.workspaceId));
@@ -75,7 +75,10 @@ export function buildInternalHeaders(
   if (ctx.userName)
     headers.set("X-XS-User-Name", sanitizeInternalHeaderValue(ctx.userName));
   if (ctx.userAvatarUrl)
-    headers.set("X-XS-User-Avatar-Url", sanitizeInternalHeaderValue(ctx.userAvatarUrl));
+    headers.set(
+      "X-XS-User-Avatar-Url",
+      sanitizeInternalHeaderValue(ctx.userAvatarUrl)
+    );
 
   return headers;
 }

@@ -143,8 +143,9 @@ export class DynamicRouter {
     if (typeof name === "string" && name.length > 0) auth.name = name;
 
     const record = claims as Record<string, unknown> | null;
-    const avatarUrl =
-      (record?.avatar_url ?? record?.avatarUrl ?? record?.picture) as unknown;
+    const avatarUrl = (record?.avatar_url ??
+      record?.avatarUrl ??
+      record?.picture) as unknown;
     if (typeof avatarUrl === "string" && avatarUrl.length > 0)
       auth.avatarUrl = avatarUrl;
 
