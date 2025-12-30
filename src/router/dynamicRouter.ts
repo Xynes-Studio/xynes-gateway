@@ -14,16 +14,70 @@ import { buildInternalHeaders } from "../security/internalHeaders";
 import { extractBearerToken, verifyJwt, type JwtClaims } from "../utils/jwt";
 import { getPathnameFromUrlOrPath } from "../utils/url";
 import type { RequestAuth } from "../types/requestAuth";
+import type { RateLimiter } from "../rateLimit/rateLimiter";
+import type { RateLimitContext } from "../rateLimit/types";
+import { extractClientIp } from "../rateLimit/keyBuilder";
+
+export interface DynamicRouterOptions {
+  routes: Route[];
+  authzService: IAuthzService;
+  rateLimiter?: RateLimiter;
+}
+
+/**
+ * Rate limit check result.
+ */
+interface RateLimitCheckResult {
+  /** If set, the request is rate limited and this response should be returned */
+  response: Response | null;
+  /** Rate limit headers to add to successful responses */
+  headers: Record<string, string>;
+}
 
 export class DynamicRouter {
   private routes: Route[];
   private authzService: IAuthzService;
+  private rateLimiter?: RateLimiter;
 
   private static readonly AUTH_RESULT = Symbol("xynes.gateway.authResult");
 
-  constructor(routes: Route[], authzService: IAuthzService) {
-    this.routes = routes;
-    this.authzService = authzService;
+  constructor(
+    routes: Route[],
+    authzService: IAuthzService,
+    rateLimiter?: RateLimiter
+  );
+  constructor(options: DynamicRouterOptions);
+  constructor(
+    routesOrOptions: Route[] | DynamicRouterOptions,
+    authzService?: IAuthzService,
+    rateLimiter?: RateLimiter
+  ) {
+    if (Array.isArray(routesOrOptions)) {
+      // Legacy constructor: (routes, authzService, rateLimiter?)
+      this.routes = routesOrOptions;
+      this.authzService = authzService!;
+      this.rateLimiter = rateLimiter;
+    } else {
+      // New constructor: (options)
+      this.routes = routesOrOptions.routes;
+      this.authzService = routesOrOptions.authzService;
+      this.rateLimiter = routesOrOptions.rateLimiter;
+    }
+  }
+
+  /**
+   * Set or update the rate limiter instance.
+   * Useful for lazy initialization.
+   */
+  setRateLimiter(rateLimiter: RateLimiter): void {
+    this.rateLimiter = rateLimiter;
+  }
+
+  /**
+   * Get the current rate limiter instance (if any).
+   */
+  getRateLimiter(): RateLimiter | undefined {
+    return this.rateLimiter;
   }
 
   private static readonly UNSAFE_PAYLOAD_KEYS = new Set([
@@ -512,11 +566,75 @@ export class DynamicRouter {
     }
   }
 
+  /**
+   * Check rate limit for the matched route.
+   * SEC-RATELIMIT-1: Generic dynamic rate limiting.
+   *
+   * @returns Object with response (if rate limited) and headers to propagate
+   */
+  private async checkRateLimit(
+    match: RouteMatch,
+    request: Request,
+    requestId: string
+  ): Promise<RateLimitCheckResult> {
+    if (!this.rateLimiter) {
+      return { response: null, headers: {} };
+    }
+
+    const { route, params } = match;
+    const userId = request.auth?.userId ?? null;
+    const workspaceId = params.workspaceId ?? null;
+    const clientIp = extractClientIp(request.headers);
+
+    const context: RateLimitContext = {
+      routeId: route.id,
+      clientIp,
+      workspaceId,
+      userId,
+    };
+
+    const result = await this.rateLimiter.check(context);
+
+    // No rate limit configured for this route
+    if (!result) {
+      return { response: null, headers: {} };
+    }
+
+    // Build headers for the response
+    const rateLimitHeaders: Record<string, string> = result.headers;
+
+    // If rate limit exceeded, return 429
+    if (!result.allowed) {
+      const errorResponse = createErrorResponse(
+        "RATE_LIMIT_EXCEEDED",
+        "Too many requests. Please try again later.",
+        requestId
+      );
+
+      const headers = new Headers({
+        "Content-Type": "application/json",
+        ...rateLimitHeaders,
+      });
+
+      return {
+        response: new Response(JSON.stringify(errorResponse), {
+          status: 429,
+          headers,
+        }),
+        headers: rateLimitHeaders,
+      };
+    }
+
+    // Request allowed - return headers to propagate to response
+    return { response: null, headers: rateLimitHeaders };
+  }
+
   handle = async (c: Context) => {
     const requestId = c.get("requestId") || generateRequestId();
     const match = this.findMatch(c.req.method, c.req.path);
 
     if (match) {
+      // First, run authorization to populate req.auth
       const auth = await this.authorize(match, c.req.raw);
       if (!auth.authorized) {
         const errorResponse = createErrorResponse(
@@ -527,6 +645,17 @@ export class DynamicRouter {
         return c.json(errorResponse, auth.status);
       }
 
+      // SEC-RATELIMIT-1: Check rate limit AFTER authorization but BEFORE proxying
+      // This ensures we have userId populated for user-based rate limiting
+      const rateLimitCheck = await this.checkRateLimit(
+        match,
+        c.req.raw,
+        requestId
+      );
+      if (rateLimitCheck.response) {
+        return rateLimitCheck.response;
+      }
+
       // `authorize()` attaches `req.auth.userId` (when present). Proxy must rely on `req.auth.userId`.
       const response = await this.proxyRequest(
         match,
@@ -534,6 +663,20 @@ export class DynamicRouter {
         c.req.query(),
         requestId
       );
+
+      // Propagate rate limit headers to successful responses
+      if (Object.keys(rateLimitCheck.headers).length > 0) {
+        const newHeaders = new Headers(response.headers);
+        for (const [key, value] of Object.entries(rateLimitCheck.headers)) {
+          newHeaders.set(key, value);
+        }
+        return new Response(response.body, {
+          status: response.status,
+          statusText: response.statusText,
+          headers: newHeaders,
+        });
+      }
+
       return response;
     }
 
