@@ -34,7 +34,9 @@ These conventions are enforced to keep the gateway consistent with broader platf
   - `src/security/**`: header ownership rules, JWKS URL policy, startup security warnings.
   - `src/utils/**`: pure helpers (JWT verification, URL sanitation, request IDs, error mapping).
   - `src/services/**`: outbound integrations (authz, telemetry, downstream proxy helpers).
-  - `src/middleware/**`: Hono middleware only (logging, error handling, request IDs).
+  - `src/middleware/**`: Hono middleware only (logging, error handling, request IDs, rate limiting).
+  - `src/rateLimit/**`: rate limiting module (types, key builder, config repository, stores).
+  - `src/infra/**`: infrastructure setup (config, DB, rate limit initialization).
   - `src/tests/**`: integration/stack tests (unit tests stay colocated as `*.test.ts`).
 
 - **Auth context propagation (GATEWAY-AUTH-2)**
@@ -249,6 +251,118 @@ Ensure the following environment variables are set:
 - `JWT_REQUIRE_ISS_AUD_IN_PROD`: Optional guard. When set to `1`/`true`, gateway refuses to start in `NODE_ENV=production` unless both `JWT_ISSUER` and `JWT_AUDIENCE` are set.
 - `JWT_PUBLIC_KEY`: Optional PEM public key for RS256 validation (alternative to `JWT_JWKS_URL`)
 - `JWT_JWKS_URL`: Optional JWKS URL for RS256 validation. When set, the gateway fetches and caches JWKS in-memory with a TTL; only `https://` URLs are allowed and redirects are rejected. Hostnames must not be `localhost` or a private IP literal (note: DNS resolution is not performed, so ensure your hostname cannot resolve to private IPs).
+
+## Rate Limiting (SEC-RATELIMIT-1)
+
+The gateway implements generic dynamic rate limiting to protect downstream services from abuse.
+
+### Architecture
+
+```
+┌──────────────┐     ┌─────────────────┐     ┌──────────────────┐
+│   Request    │────▶│  Rate Limiter   │────▶│  Config Repo     │
+│   Context    │     │   (check)       │     │  (DB or static)  │
+└──────────────┘     └────────┬────────┘     └──────────────────┘
+                              │
+                              ▼
+                     ┌─────────────────┐
+                     │  Rate Limit     │
+                     │  Store (sliding │
+                     │  window)        │
+                     └─────────────────┘
+```
+
+### Components
+
+- **`src/rateLimit/types.ts`**: Type definitions for rate limiting (BucketType, RateLimitConfig, IRateLimitStore)
+- **`src/rateLimit/keyBuilder.ts`**: Computes rate limit keys from bucket type and request context
+- **`src/rateLimit/configRepository.ts`**: Fetches rate limit configs (cached from DB or static)
+- **`src/rateLimit/stores/inMemoryStore.ts`**: Sliding window rate limiter implementation
+- **`src/rateLimit/rateLimiter.ts`**: Orchestration service that coordinates config lookup and store operations
+- **`src/middleware/rateLimit.ts`**: Hono middleware and standalone checker for dynamic router
+- **`src/infra/rateLimitSetup.ts`**: Factory functions for rate limiter initialization
+
+### Bucket Types
+
+Rate limits are applied based on configurable "bucket types":
+
+| Bucket Type | Key Components | Use Case |
+|-------------|----------------|----------|
+| `ip` | Client IP | Anonymous rate limiting |
+| `workspace` | Workspace ID | Per-workspace quotas |
+| `user` | User ID | Per-user quotas |
+| `ip+workspace` | IP + Workspace | IP-based limits per workspace |
+| `ip+user` | IP + User | IP-based limits per user |
+
+### Configuration
+
+Rate limit configurations are stored in `platform.route_rate_limits`:
+
+```sql
+CREATE TABLE platform.route_rate_limits (
+  id UUID PRIMARY KEY,
+  route_id UUID REFERENCES platform.routes(id),
+  bucket_type TEXT NOT NULL,      -- 'ip', 'workspace', 'user', 'ip+workspace', 'ip+user'
+  limit_count INTEGER NOT NULL,   -- Max requests in window
+  window_sec INTEGER NOT NULL,    -- Window duration in seconds
+  burst_factor NUMERIC DEFAULT 1.0, -- Multiplier for burst capacity
+  enabled BOOLEAN DEFAULT true
+);
+```
+
+### Headers
+
+When rate limiting is active, the gateway includes standard rate limit headers:
+
+| Header | Description |
+|--------|-------------|
+| `X-RateLimit-Limit` | Maximum requests allowed (including burst) |
+| `X-RateLimit-Remaining` | Requests remaining in current window |
+| `X-RateLimit-Reset` | Unix timestamp when window resets |
+| `Retry-After` | Seconds to wait (only on 429 response) |
+
+### Response on Rate Limit
+
+When rate limit is exceeded, the gateway returns 429 with the standard error envelope:
+
+```json
+{
+  "ok": false,
+  "error": {
+    "code": "RATE_LIMIT_EXCEEDED",
+    "message": "Too many requests. Please try again later."
+  },
+  "meta": { "requestId": "req_..." }
+}
+```
+
+### Development vs Production
+
+- **Development**: Uses `StaticRateLimitConfigRepository` with default configs when `DATABASE_URL` is not set
+- **Production**: Uses `CachedRateLimitConfigRepository` to fetch configs from DB with TTL-based caching
+
+### Adding Rate Limits
+
+1. Add a rate limit config to `platform.route_rate_limits`:
+```sql
+INSERT INTO platform.route_rate_limits 
+  (route_id, bucket_type, limit_count, window_sec, burst_factor, enabled)
+VALUES 
+  ('route-uuid', 'ip+workspace', 10, 60, 1.5, true);
+```
+
+2. The gateway will pick up the config on next cache refresh (default: 5 min TTL)
+
+### Future: Redis Store
+
+The rate limiting architecture supports pluggable stores. A Redis store can be added for distributed rate limiting:
+
+```typescript
+// Future implementation in src/rateLimit/stores/redisStore.ts
+export class RedisRateLimitStore implements IRateLimitStore {
+  // Sliding window implementation using Redis sorted sets
+}
+```
 
 #### Supabase Auth (GATEWAY-AUTH-2)
 
