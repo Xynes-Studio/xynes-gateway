@@ -24,6 +24,16 @@ export interface DynamicRouterOptions {
   rateLimiter?: RateLimiter;
 }
 
+/**
+ * Rate limit check result.
+ */
+interface RateLimitCheckResult {
+  /** If set, the request is rate limited and this response should be returned */
+  response: Response | null;
+  /** Rate limit headers to add to successful responses */
+  headers: Record<string, string>;
+}
+
 export class DynamicRouter {
   private routes: Route[];
   private authzService: IAuthzService;
@@ -560,15 +570,15 @@ export class DynamicRouter {
    * Check rate limit for the matched route.
    * SEC-RATELIMIT-1: Generic dynamic rate limiting.
    *
-   * @returns Response if rate limited, null if allowed
+   * @returns Object with response (if rate limited) and headers to propagate
    */
   private async checkRateLimit(
     match: RouteMatch,
     request: Request,
     requestId: string
-  ): Promise<Response | null> {
+  ): Promise<RateLimitCheckResult> {
     if (!this.rateLimiter) {
-      return null;
+      return { response: null, headers: {} };
     }
 
     const { route, params } = match;
@@ -587,7 +597,7 @@ export class DynamicRouter {
 
     // No rate limit configured for this route
     if (!result) {
-      return null;
+      return { response: null, headers: {} };
     }
 
     // Build headers for the response
@@ -606,14 +616,17 @@ export class DynamicRouter {
         ...rateLimitHeaders,
       });
 
-      return new Response(JSON.stringify(errorResponse), {
-        status: 429,
-        headers,
-      });
+      return {
+        response: new Response(JSON.stringify(errorResponse), {
+          status: 429,
+          headers,
+        }),
+        headers: rateLimitHeaders,
+      };
     }
 
-    // Request allowed - rate limit headers will be added by caller if needed
-    return null;
+    // Request allowed - return headers to propagate to response
+    return { response: null, headers: rateLimitHeaders };
   }
 
   handle = async (c: Context) => {
@@ -634,13 +647,13 @@ export class DynamicRouter {
 
       // SEC-RATELIMIT-1: Check rate limit AFTER authorization but BEFORE proxying
       // This ensures we have userId populated for user-based rate limiting
-      const rateLimitResponse = await this.checkRateLimit(
+      const rateLimitCheck = await this.checkRateLimit(
         match,
         c.req.raw,
         requestId
       );
-      if (rateLimitResponse) {
-        return rateLimitResponse;
+      if (rateLimitCheck.response) {
+        return rateLimitCheck.response;
       }
 
       // `authorize()` attaches `req.auth.userId` (when present). Proxy must rely on `req.auth.userId`.
@@ -650,6 +663,20 @@ export class DynamicRouter {
         c.req.query(),
         requestId
       );
+
+      // Propagate rate limit headers to successful responses
+      if (Object.keys(rateLimitCheck.headers).length > 0) {
+        const newHeaders = new Headers(response.headers);
+        for (const [key, value] of Object.entries(rateLimitCheck.headers)) {
+          newHeaders.set(key, value);
+        }
+        return new Response(response.body, {
+          status: response.status,
+          statusText: response.statusText,
+          headers: newHeaders,
+        });
+      }
+
       return response;
     }
 

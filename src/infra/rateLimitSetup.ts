@@ -70,9 +70,11 @@ export function createRateLimiterWithStaticConfig(
 async function fetchRateLimitConfigs(
   databaseUrl: string
 ): Promise<RateLimitConfigRow[]> {
+  let sql: ReturnType<typeof import("postgres").default> | null = null;
+
   try {
     const { default: postgres } = await import("postgres");
-    const sql = postgres(databaseUrl, {
+    sql = postgres(databaseUrl, {
       max: 1,
       prepare: false,
       connect_timeout: 5,
@@ -92,7 +94,6 @@ async function fetchRateLimitConfigs(
       WHERE rrl.enabled = true
     `;
 
-    await sql.end();
     return rows;
   } catch (error) {
     console.error(
@@ -100,6 +101,10 @@ async function fetchRateLimitConfigs(
       error
     );
     return [];
+  } finally {
+    if (sql) {
+      await sql.end();
+    }
   }
 }
 

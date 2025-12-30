@@ -165,13 +165,25 @@ describe("Rate Limiting Integration", () => {
         body: JSON.stringify({ content: "Test comment" }),
       });
 
-      // First 3 requests should succeed
+      // First 3 requests should succeed - test both auth and rate limiting
       for (let i = 0; i < 3; i++) {
         const match = router.findMatch("POST", "/workspaces/ws-1/comments");
         expect(match).not.toBeNull();
 
         const auth = await router.authorize(match!, request);
         expect(auth.authorized).toBe(true);
+
+        // Also exercise rate limiter with same context
+        const rateLimitResult = await rateLimiter.check({
+          routeId: "route-1",
+          clientIp: "192.168.1.1",
+          workspaceId: "ws-1",
+          userId: "user-1",
+        });
+
+        // Rate limiter should allow the request
+        expect(rateLimitResult).not.toBeNull();
+        expect(rateLimitResult?.allowed).toBe(true);
       }
     });
 

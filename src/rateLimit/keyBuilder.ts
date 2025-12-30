@@ -118,9 +118,12 @@ export function extractClientIp(
     }
   }
 
-  // Fallback to connection remote address
+  // Fallback to connection remote address (with validation)
   if (connInfo?.remoteAddr) {
-    return connInfo.remoteAddr;
+    const trimmedAddr = connInfo.remoteAddr.trim();
+    if (isValidIp(trimmedAddr)) {
+      return trimmedAddr;
+    }
   }
 
   return null;

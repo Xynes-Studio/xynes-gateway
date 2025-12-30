@@ -227,6 +227,19 @@ describe("Rate Limit Key Builder", () => {
       );
     });
 
+    it("should validate and trim connection info remoteAddr", () => {
+      const headers = new Headers();
+      expect(extractClientIp(headers, { remoteAddr: "  192.168.1.100  " })).toBe(
+        "192.168.1.100"
+      );
+    });
+
+    it("should reject invalid remoteAddr in connection info", () => {
+      const headers = new Headers();
+      expect(extractClientIp(headers, { remoteAddr: "not-an-ip" })).toBeNull();
+      expect(extractClientIp(headers, { remoteAddr: "localhost" })).toBeNull();
+    });
+
     it("should return null if no IP found", () => {
       const headers = new Headers();
       expect(extractClientIp(headers)).toBeNull();
