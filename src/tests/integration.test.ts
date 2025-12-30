@@ -616,4 +616,215 @@ describe("Gateway Integration", () => {
 
     expect([200, 401, 403, 500]).toContain(res.status);
   });
+
+  // GATEWAY-CONTENT-ROUTES-1: Generic Dynamic Public Content Routes
+  describe("GATEWAY-CONTENT-ROUTES-1: Dynamic Public Content", () => {
+    it("should route /workspaces/:id/content/blog to cms.content.listPublished (public, no authz)", async () => {
+      const app = await createApp();
+
+      global.fetch = vi.fn(
+        (url: string | URL | Request, init?: RequestInit) => {
+          const urlStr = url.toString();
+          if (urlStr.includes("/authz/check")) {
+            throw new Error("authz should NOT be called for isPublic routes");
+          }
+          if (urlStr.includes("/internal/cms-actions")) {
+            const headers = new Headers(init?.headers);
+            expect(headers.get("X-Internal-Service-Token")).toBe(
+              "test-internal-token"
+            );
+            expect(headers.get("X-Workspace-Id")).toBe("workspace-123");
+
+            const body = JSON.parse(String(init?.body || "{}")) as {
+              actionKey?: string;
+              payload?: Record<string, unknown>;
+            };
+            expect(body.actionKey).toBe("cms.content.listPublished");
+            expect(body.payload?.routeSegment).toBe("blog");
+
+            return Promise.resolve(
+              new Response(
+                JSON.stringify({
+                  entries: [
+                    { id: "e1", slug: "post-1", title: "Post 1" },
+                    { id: "e2", slug: "post-2", title: "Post 2" },
+                  ],
+                }),
+                { status: 200 }
+              )
+            );
+          }
+          if (urlStr.includes("/internal/telemetry-actions")) {
+            return Promise.resolve(
+              new Response(JSON.stringify({ id: "evt-1" }), { status: 201 })
+            );
+          }
+          return Promise.reject(new Error(`Unknown URL: ${urlStr}`));
+        }
+      ) as unknown as typeof fetch;
+
+      const res = await app.request("/workspaces/workspace-123/content/blog", {
+        method: "GET",
+      });
+
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as {
+        ok: boolean;
+        data: { entries: unknown[] };
+      };
+      expect(body.ok).toBe(true);
+      expect(body.data.entries).toHaveLength(2);
+    });
+
+    it("should route /workspaces/:id/content/blog/my-post to cms.content.getPublishedBySlug (public, no authz)", async () => {
+      const app = await createApp();
+
+      global.fetch = vi.fn(
+        (url: string | URL | Request, init?: RequestInit) => {
+          const urlStr = url.toString();
+          if (urlStr.includes("/authz/check")) {
+            throw new Error("authz should NOT be called for isPublic routes");
+          }
+          if (urlStr.includes("/internal/cms-actions")) {
+            const body = JSON.parse(String(init?.body || "{}")) as {
+              actionKey?: string;
+              payload?: Record<string, unknown>;
+            };
+            expect(body.actionKey).toBe("cms.content.getPublishedBySlug");
+            expect(body.payload?.routeSegment).toBe("blog");
+            expect(body.payload?.slug).toBe("my-post");
+
+            return Promise.resolve(
+              new Response(
+                JSON.stringify({
+                  entry: { id: "e1", slug: "my-post", title: "My Post" },
+                }),
+                { status: 200 }
+              )
+            );
+          }
+          if (urlStr.includes("/internal/telemetry-actions")) {
+            return Promise.resolve(
+              new Response(JSON.stringify({ id: "evt-1" }), { status: 201 })
+            );
+          }
+          return Promise.reject(new Error(`Unknown URL: ${urlStr}`));
+        }
+      ) as unknown as typeof fetch;
+
+      const res = await app.request(
+        "/workspaces/workspace-123/content/blog/my-post",
+        { method: "GET" }
+      );
+
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as {
+        ok: boolean;
+        data: { entry: { slug: string } };
+      };
+      expect(body.ok).toBe(true);
+      expect(body.data.entry.slug).toBe("my-post");
+    });
+
+    it("should support any routeSegment (e.g. news, events) without gateway code changes", async () => {
+      // Acceptance criteria: Adding a new type later (e.g. news) requires only
+      // CMS content type setup + mapping typeKey → contentType, not any gateway code change.
+      const app = await createApp();
+
+      global.fetch = vi.fn(
+        (url: string | URL | Request, init?: RequestInit) => {
+          const urlStr = url.toString();
+          if (urlStr.includes("/authz/check")) {
+            throw new Error("authz should NOT be called for isPublic routes");
+          }
+          if (urlStr.includes("/internal/cms-actions")) {
+            const body = JSON.parse(String(init?.body || "{}")) as {
+              actionKey?: string;
+              payload?: Record<string, unknown>;
+            };
+            expect(body.actionKey).toBe("cms.content.listPublished");
+            // The gateway passes whatever routeSegment it receives - CMS resolves it
+            expect(body.payload?.routeSegment).toBe("news");
+
+            return Promise.resolve(
+              new Response(JSON.stringify({ entries: [] }), { status: 200 })
+            );
+          }
+          if (urlStr.includes("/internal/telemetry-actions")) {
+            return Promise.resolve(
+              new Response(JSON.stringify({ id: "evt-1" }), { status: 201 })
+            );
+          }
+          return Promise.reject(new Error(`Unknown URL: ${urlStr}`));
+        }
+      ) as unknown as typeof fetch;
+
+      // Works for /news without any gateway changes
+      const res = await app.request("/workspaces/workspace-123/content/news", {
+        method: "GET",
+      });
+      expect(res.status).toBe(200);
+    });
+
+    it("should enforce workspace context via X-Workspace-Id header even for public routes", async () => {
+      const app = await createApp();
+      let capturedWorkspaceId: string | null = null;
+
+      global.fetch = vi.fn(
+        (url: string | URL | Request, init?: RequestInit) => {
+          const urlStr = url.toString();
+          if (urlStr.includes("/internal/cms-actions")) {
+            const headers = new Headers(init?.headers);
+            capturedWorkspaceId = headers.get("X-Workspace-Id");
+
+            return Promise.resolve(
+              new Response(JSON.stringify({ entries: [] }), { status: 200 })
+            );
+          }
+          if (urlStr.includes("/internal/telemetry-actions")) {
+            return Promise.resolve(
+              new Response(JSON.stringify({ id: "evt-1" }), { status: 201 })
+            );
+          }
+          return Promise.reject(new Error(`Unknown URL: ${urlStr}`));
+        }
+      ) as unknown as typeof fetch;
+
+      await app.request("/workspaces/my-workspace-id/content/events", {
+        method: "GET",
+      });
+
+      expect(capturedWorkspaceId).toBe("my-workspace-id");
+    });
+
+    it("should not set X-XS-User-Id for anonymous public content requests", async () => {
+      const app = await createApp();
+      let capturedUserId: string | null | undefined;
+
+      global.fetch = vi.fn(
+        (url: string | URL | Request, init?: RequestInit) => {
+          const urlStr = url.toString();
+          if (urlStr.includes("/internal/cms-actions")) {
+            const headers = new Headers(init?.headers);
+            capturedUserId = headers.get("X-XS-User-Id");
+
+            return Promise.resolve(
+              new Response(JSON.stringify({ entries: [] }), { status: 200 })
+            );
+          }
+          if (urlStr.includes("/internal/telemetry-actions")) {
+            return Promise.resolve(
+              new Response(JSON.stringify({ id: "evt-1" }), { status: 201 })
+            );
+          }
+          return Promise.reject(new Error(`Unknown URL: ${urlStr}`));
+        }
+      ) as unknown as typeof fetch;
+
+      // Anonymous request (no Authorization header)
+      await app.request("/workspaces/ws-1/content/blog", { method: "GET" });
+
+      expect(capturedUserId).toBeNull();
+    });
+  });
 });
