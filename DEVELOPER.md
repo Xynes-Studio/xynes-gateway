@@ -183,16 +183,35 @@ Some routes are not workspace-scoped (e.g. `GET /me`). For these routes:
   - Auth required, but intentionally **not** RBAC-protected (invite token is the authority)
   - Included in the gateway auth-only allowlist to avoid inadvertently bypassing authz for other global routes
 
-### Generic Content API (ROUTES-CONTENT-1)
+### Generic Content API (GATEWAY-CONTENT-ROUTES-1)
 
 The gateway exposes template-driven content routes under `/content/**` so adding a new content type does not require adding new gateway routes (no per-template routes like `/programs`).
 
-- **Route → Action mapping**
-  - `GET /workspaces/:workspaceId/content/:routeSegment` → `cms.content.listPublished`
-  - `GET /workspaces/:workspaceId/content/:routeSegment/:slug` → `cms.content.getPublishedBySlug`
-- **Payload mapping**
-  - `routeSegment` and `slug` are forwarded as top-level payload keys alongside any query params.
-  - Workspace context is enforced via the `:workspaceId` path param, even though these routes are `isPublic=true`.
+**Routes:**
+- `GET /workspaces/:workspaceId/content/:routeSegment` → `cms.content.listPublished`
+- `GET /workspaces/:workspaceId/content/:routeSegment/:slug` → `cms.content.getPublishedBySlug`
+
+**Configuration:**
+- `serviceKey = "cms-core"` - routes to CMS service
+- `workspaceScoped = true` - workspace context enforced via path param
+- `isPublic = true` - no auth/authz required (only published entries returned)
+
+**Payload mapping:**
+- `routeSegment` (typeKey) and `slug` are forwarded as top-level payload keys
+- Workspace context is enforced via the `:workspaceId` path param even for public routes
+- CMS service resolves `routeSegment` to a `contentTypeId` per workspace
+
+**Security considerations:**
+- Gateway skips authz check for `isPublic = true` routes
+- Workspace context is still enforced from path
+- Only published entries are returned (enforced by CMS logic)
+- Pagination limits are enforced to prevent DoS
+
+**Acceptance criteria:**
+- For a workspace with a `blog_post` type keyed as `blog`:
+  - `GET /workspaces/<id>/content/blog` returns published blog posts
+  - `GET /workspaces/<id>/content/blog/some-slug` returns that entry
+- Adding a new type (e.g. `news`) requires only CMS content type setup + mapping `routeSegment → contentType`, not any gateway code change
 
 ### Standard Response Envelope (GATE-4)
 
