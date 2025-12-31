@@ -37,13 +37,13 @@ describe("SEC-INT-1 internal auth (stack)", () => {
     if (!provided) {
       return c.json(
         { ok: false, error: { code: "UNAUTHORIZED", message: "missing" } },
-        401,
+        401
       );
     }
     if (provided !== token) {
       return c.json(
         { ok: false, error: { code: "FORBIDDEN", message: "invalid" } },
-        403,
+        403
       );
     }
     return null;
@@ -73,7 +73,7 @@ describe("SEC-INT-1 internal auth (stack)", () => {
           echoedUserId: c.req.header("X-XS-User-Id"),
           echoedWorkspaceId: c.req.header("X-Workspace-Id"),
         },
-        200,
+        200
       );
     });
 
@@ -106,19 +106,26 @@ describe("SEC-INT-1 internal auth (stack)", () => {
   it("gateway succeeds only when internal token is injected", async () => {
     telemetryCalls = 0;
 
-    global.fetch = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
-      const urlStr = typeof url === "string" ? url : url.toString();
-      const req = new Request(urlStr, init);
+    global.fetch = vi.fn(
+      async (url: string | URL | Request, init?: RequestInit) => {
+        const urlStr = typeof url === "string" ? url : url.toString();
+        const req = new Request(urlStr, init);
 
-      if (urlStr.startsWith("http://authz.local/")) return authzApp.fetch(req);
-      if (urlStr.startsWith("http://doc.local/")) return docApp.fetch(req);
-      if (urlStr.startsWith("http://cms.local/")) return cmsApp.fetch(req);
-      if (urlStr.startsWith("http://telemetry.local/")) return telemetryApp.fetch(req);
-      throw new Error(`Unexpected fetch URL: ${urlStr}`);
-    }) as unknown as typeof fetch;
+        if (urlStr.startsWith("http://authz.local/"))
+          return authzApp.fetch(req);
+        if (urlStr.startsWith("http://doc.local/")) return docApp.fetch(req);
+        if (urlStr.startsWith("http://cms.local/")) return cmsApp.fetch(req);
+        if (urlStr.startsWith("http://telemetry.local/"))
+          return telemetryApp.fetch(req);
+        throw new Error(`Unexpected fetch URL: ${urlStr}`);
+      }
+    ) as unknown as typeof fetch;
 
     const app = await createApp();
-    const authToken = signHs256ForTest({ sub: "user-1", exp: 2_000_000_000 }, jwtSecret);
+    const authToken = signHs256ForTest(
+      { sub: "user-1", exp: 2_000_000_000 },
+      jwtSecret
+    );
 
     const bodyContent = JSON.stringify({ title: "hello" });
     const res = await app.request("/workspaces/ws-1/documents", {
@@ -137,7 +144,11 @@ describe("SEC-INT-1 internal auth (stack)", () => {
     expect(res.status).toBe(200);
     const body = (await res.json()) as {
       ok: boolean;
-      data: { id: string; echoedUserId?: string | null; echoedWorkspaceId?: string | null };
+      data: {
+        id: string;
+        echoedUserId?: string | null;
+        echoedWorkspaceId?: string | null;
+      };
     };
     expect(body.ok).toBe(true);
     expect(body.data).toEqual(expect.objectContaining({ id: "doc-1" }));

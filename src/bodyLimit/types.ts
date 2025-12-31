@@ -72,7 +72,10 @@ export interface BodyLimitCheckResult {
   /** Actual or declared body size */
   bodySize: number;
   /** Error code if not allowed */
-  errorCode?: "PAYLOAD_TOO_LARGE" | "BODY_NOT_ALLOWED" | "CONTENT_LENGTH_REQUIRED";
+  errorCode?:
+    | "PAYLOAD_TOO_LARGE"
+    | "BODY_NOT_ALLOWED"
+    | "CONTENT_LENGTH_REQUIRED";
   /** Human-readable error message */
   errorMessage?: string;
 }
