@@ -497,11 +497,12 @@ describe("DynamicRouter", () => {
       );
 
       const body = JSON.parse(telemetryCall![1].body);
-      expect(body.actionKey).toBe("telemetry.event.ingest");
+      expect(body.actionKey).toBe("telemetry.events.ingest");
       expect(body.payload.source).toBe("gateway");
-      expect(body.payload.eventType).toBe("http.request");
+      expect(body.payload.eventType).toBe("http_request");
       expect(body.payload.targetType).toBe("service");
       expect(body.payload.targetId).toBe("doc-service");
+      // TELE-GW-1: New canonical event format stores data in metadata
       expect(body.payload.metadata.path).toBe("/workspaces/123/documents");
       expect(telemetryCall![1].body).not.toContain("supersecret");
       expect(telemetryCall![1].body).not.toContain("token=");
@@ -509,6 +510,9 @@ describe("DynamicRouter", () => {
       expect(body.payload.metadata.userId).toBe("user-1");
       expect(body.payload.metadata.workspaceId).toBe("123");
       expect(body.payload.metadata.durationMs).toBeGreaterThanOrEqual(0);
+      // TELE-GW-1: New fields
+      expect(body.payload.metadata.type).toBe("http_request");
+      expect(body.payload.metadata.routeId).toBeDefined();
     });
 
     it("should send telemetry event even if proxy returns error status", async () => {
@@ -565,11 +569,13 @@ describe("DynamicRouter", () => {
       const response = await router.proxyRequest(match, req, {});
       expect(response.status).toBe(201); // Main request succeeds
 
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      await new Promise((resolve) => setTimeout(resolve, 100));
 
-      // Should have logged error
+      // Should have logged error - updated message format for TELE-GW-1
       expect(consoleSpy).toHaveBeenCalledWith(
-        expect.stringContaining("[TelemetryService] Error: Telemetry Down")
+        expect.stringContaining(
+          "[GatewayTelemetryService] Error: Telemetry Down"
+        )
       );
       consoleSpy.mockRestore();
     });

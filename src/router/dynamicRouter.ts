@@ -2,7 +2,7 @@ import { config } from "../infra/config";
 import type { Context } from "hono";
 import type { Route, RouteMatch } from "../types";
 import type { IAuthzService } from "../services/authzService";
-import { telemetryService } from "../services/telemetryService";
+import { gatewayTelemetryService } from "../telemetry";
 import { createSuccessResponse, createErrorResponse } from "../types/envelope";
 import { generateRequestId } from "../utils/requestId";
 import {
@@ -539,10 +539,13 @@ export class DynamicRouter {
       });
     }
 
-    // Telemetry Logic
+    // Telemetry Logic - TELE-GW-1: Sanitized gateway telemetry events
     const durationMs = Date.now() - startTime;
+    const clientIp = extractClientIp(request.headers);
+    const userAgent = request.headers.get("User-Agent");
 
-    telemetryService.trackRequest({
+    gatewayTelemetryService.trackHttpRequest({
+      routeId: route.id,
       method: request.method,
       path: getPathnameFromUrlOrPath(request.url),
       pathPattern: route.pathPattern,
@@ -552,6 +555,11 @@ export class DynamicRouter {
       durationMs,
       workspaceId,
       userId,
+      clientIp,
+      userAgent,
+      // Include error code for non-2xx responses
+      errorCode:
+        downstreamStatus >= 400 ? mapStatusToErrorCode(downstreamStatus) : null,
     });
 
     // Wrap response in standard envelope
@@ -793,7 +801,42 @@ export class DynamicRouter {
     return { response: null };
   }
 
+  /**
+   * TELE-GW-1: Emit telemetry for a request.
+   * Helper to ensure consistent telemetry emission across all code paths.
+   */
+  private emitTelemetry(
+    request: Request,
+    match: RouteMatch | null,
+    statusCode: number,
+    durationMs: number,
+    errorCode?: string | null
+  ): void {
+    const clientIp = extractClientIp(request.headers);
+    const userAgent = request.headers.get("User-Agent");
+    const userId = request.auth?.userId ?? null;
+
+    gatewayTelemetryService.trackHttpRequest({
+      routeId: match?.route.id ?? null,
+      method: request.method,
+      path: getPathnameFromUrlOrPath(request.url),
+      pathPattern: match?.route.pathPattern ?? null,
+      serviceKey: match?.route.serviceKey ?? null,
+      actionKey: match?.route.actionKey ?? null,
+      statusCode,
+      durationMs,
+      workspaceId: match?.params.workspaceId ?? null,
+      userId,
+      clientIp,
+      userAgent,
+      errorCode:
+        errorCode ??
+        (statusCode >= 400 ? mapStatusToErrorCode(statusCode) : null),
+    });
+  }
+
   handle = async (c: Context) => {
+    const startTime = Date.now();
     const requestId = c.get("requestId") || generateRequestId();
     const match = this.findMatch(c.req.method, c.req.path);
 
@@ -801,6 +844,15 @@ export class DynamicRouter {
       // First, run authorization to populate req.auth
       const auth = await this.authorize(match, c.req.raw);
       if (!auth.authorized) {
+        // TELE-GW-1: Emit telemetry for auth failures
+        this.emitTelemetry(
+          c.req.raw,
+          match,
+          auth.status,
+          Date.now() - startTime,
+          auth.errorCode
+        );
+
         const errorResponse = createErrorResponse(
           auth.errorCode,
           auth.message,
@@ -817,6 +869,13 @@ export class DynamicRouter {
         requestId
       );
       if (bodyLimitCheck.response) {
+        // TELE-GW-1: Emit telemetry for body limit failures
+        this.emitTelemetry(
+          c.req.raw,
+          match,
+          bodyLimitCheck.response.status,
+          Date.now() - startTime
+        );
         return bodyLimitCheck.response;
       }
 
@@ -828,10 +887,19 @@ export class DynamicRouter {
         requestId
       );
       if (rateLimitCheck.response) {
+        // TELE-GW-1: Emit telemetry for rate limit failures
+        this.emitTelemetry(
+          c.req.raw,
+          match,
+          429,
+          Date.now() - startTime,
+          "RATE_LIMIT_EXCEEDED"
+        );
         return rateLimitCheck.response;
       }
 
       // `authorize()` attaches `req.auth.userId` (when present). Proxy must rely on `req.auth.userId`.
+      // Telemetry is emitted inside proxyRequest
       const response = await this.proxyRequest(
         match,
         c.req.raw,
@@ -854,6 +922,15 @@ export class DynamicRouter {
 
       return response;
     }
+
+    // TELE-GW-1: Emit telemetry for not found
+    this.emitTelemetry(
+      c.req.raw,
+      null,
+      404,
+      Date.now() - startTime,
+      "NOT_FOUND"
+    );
 
     const notFoundResponse = createErrorResponse(
       "NOT_FOUND",
