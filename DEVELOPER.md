@@ -227,9 +227,10 @@ The gateway signs short-lived HS256 JWTs for service-to-service authentication, 
 
 | Component | Location |
 |-----------|----------|
-| JWT signing | `src/infra/security/internal-jwt.ts` (gateway) |
-| JWT verification | `src/infra/security/internal-jwt.ts` (each service) |
-| Auth middleware | `src/middleware/internal-service-auth.ts` (each service) |
+| JWT signing (gateway) | `src/security/internalJwt.ts` |
+| Internal headers (gateway) | `src/security/internalHeaders.ts` |
+| JWT verification (services) | `src/infra/security/internal-jwt.ts` |
+| Auth middleware (services) | `src/middleware/internal-service-auth.ts` |
 
 ### Public Routes (GATE-6)
 
