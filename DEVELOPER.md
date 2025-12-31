@@ -147,6 +147,91 @@ The Dynamic Router implements a "Smart Proxy" pattern:
 - Any client-sent `X-XS-*`, `X-Internal-*`, `X-Workspace-Id`, or `X-Internal-Service-Token` values are ignored/overwritten and never forwarded to internal services.
 - The gateway sends `X-XS-User-Id` only when the request is authenticated; for anonymous/public requests it is **omitted**.
 
+### Structured Internal JWT for Service-to-Service Auth (SEC-INTERNAL-AUTH-2)
+
+The gateway signs short-lived HS256 JWTs for service-to-service authentication, replacing the legacy static shared secret pattern.
+
+#### Architecture
+
+```
+┌──────────────┐     ┌─────────────────┐     ┌──────────────────┐
+│   Gateway    │────▶│  Sign JWT with  │────▶│  Backend Service │
+│   (caller)   │     │  INTERNAL_JWT_  │     │  (verifies JWT)  │
+│              │     │  SIGNING_KEY    │     │                  │
+└──────────────┘     └─────────────────┘     └──────────────────┘
+```
+
+#### JWT Structure
+
+**Header:**
+```json
+{ "alg": "HS256", "typ": "JWT" }
+```
+
+**Payload:**
+```json
+{
+  "aud": "doc-service",      // Target service (audience claim)
+  "iat": 1700000000,         // Issued-at (Unix epoch seconds)
+  "exp": 1700000060,         // Expiration (iat + 60s default TTL)
+  "internal": true,          // Marks this as an internal service JWT
+  "requestId": "req-abc123"  // Request correlation ID
+}
+```
+
+#### Configuration (Gateway)
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `INTERNAL_JWT_SIGNING_KEY` | Yes* | HS256 signing key (≥32 bytes recommended) |
+| `INTERNAL_SERVICE_TOKEN` | No | Legacy fallback token (deprecated) |
+
+*Required when `INTERNAL_AUTH_MODE=jwt` on backend services.
+
+#### Configuration (Backend Services)
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `INTERNAL_JWT_SIGNING_KEY` | Yes* | Same key as gateway for verification |
+| `INTERNAL_AUTH_MODE` | No | `jwt` (production) or `hybrid` (migration) |
+| `INTERNAL_SERVICE_TOKEN` | No | Legacy token for hybrid mode fallback |
+
+**Auth Modes:**
+- `jwt`: Only accepts signed JWTs (production target)
+- `hybrid`: Accepts JWT or falls back to legacy token (migration phase)
+
+#### Service Keys (Audience Values)
+
+| Service | Audience (`aud`) |
+|---------|------------------|
+| doc-service | `doc-service` |
+| cms-core | `cms-service` |
+| authz-service | `authz-service` |
+| telemetry-service | `telemetry-service` |
+| accounts-service | `accounts-service` |
+
+#### Security Properties
+
+- **Short-lived**: 60-second TTL prevents replay attacks
+- **Audience-scoped**: JWT is only valid for the intended service
+- **Timing-safe**: Signature verification uses constant-time comparison
+- **Clock tolerance**: 5-second skew allowance for distributed clocks
+
+#### Migration Path
+
+1. **Phase 1 (Current)**: Deploy with `INTERNAL_AUTH_MODE=hybrid` on all services
+2. **Phase 2**: Verify JWT auth working in logs, then switch to `INTERNAL_AUTH_MODE=jwt`
+3. **Phase 3**: Remove `INTERNAL_SERVICE_TOKEN` from all services
+
+#### Implementation Files
+
+| Component | Location |
+|-----------|----------|
+| JWT signing (gateway) | `src/security/internalJwt.ts` |
+| Internal headers (gateway) | `src/security/internalHeaders.ts` |
+| JWT verification (services) | `src/infra/security/internal-jwt.ts` |
+| Auth middleware (services) | `src/middleware/internal-service-auth.ts` |
+
 ### Public Routes (GATE-6)
 
 Routes can be marked as `isPublic: true` to bypass authorization checks:

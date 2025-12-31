@@ -2,6 +2,12 @@ export const config = {
   port: Number(process.env.PORT) || 4100,
   databaseUrl: process.env.DATABASE_URL,
   internalServiceToken: process.env.INTERNAL_SERVICE_TOKEN,
+  // SEC-INTERNAL-AUTH-2: JWT-based internal service authentication
+  internalJwtSigningKey: process.env.INTERNAL_JWT_SIGNING_KEY,
+  // Feature flag: 'hybrid' accepts both legacy token and JWT, 'jwt' requires JWT only
+  internalAuthMode: (process.env.INTERNAL_AUTH_MODE || "hybrid") as
+    | "hybrid"
+    | "jwt",
   auth: {
     jwtSecret: process.env.JWT_SECRET,
     jwtIssuer: process.env.JWT_ISSUER,

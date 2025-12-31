@@ -505,6 +505,9 @@ export class DynamicRouter {
       route.workspaceScoped && params.workspaceId ? params.workspaceId : null;
     const headers = buildInternalHeaders(request.headers, {
       internalServiceToken: config.internalServiceToken,
+      // SEC-INTERNAL-AUTH-2: Use JWT-based internal auth
+      internalJwtSigningKey: config.internalJwtSigningKey,
+      serviceKey,
       workspaceId,
       userId,
       userEmail,
