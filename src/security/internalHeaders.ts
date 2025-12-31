@@ -1,3 +1,5 @@
+import { signInternalJwt, mapServiceKeyToAudience } from "./internalJwt";
+
 const INTERNAL_HEADER_PREFIXES = ["x-xs-", "x-internal-"] as const;
 
 const INTERNAL_HEADER_DENYLIST = new Set<string>([
@@ -34,7 +36,12 @@ export function isClientInternalHeader(name: string): boolean {
 }
 
 export interface InternalHeaderContext {
+  /** @deprecated Use internalJwtSigningKey instead for SEC-INTERNAL-AUTH-2 */
   internalServiceToken?: string;
+  /** SEC-INTERNAL-AUTH-2: JWT signing key for internal service auth */
+  internalJwtSigningKey?: string;
+  /** Target service key (e.g., 'docs', 'cms', 'authz') for JWT audience */
+  serviceKey?: string;
   workspaceId?: string | null;
   userId?: string | null;
   userEmail?: string | null;
@@ -43,6 +50,13 @@ export interface InternalHeaderContext {
   requestId?: string | null;
 }
 
+/**
+ * Build headers for internal service communication.
+ *
+ * SEC-INTERNAL-AUTH-2: When internalJwtSigningKey and serviceKey are provided,
+ * generates a signed JWT with the target service as audience. Falls back to
+ * legacy static token if JWT signing is not configured.
+ */
 export function buildInternalHeaders(
   clientHeaders: Headers,
   ctx: InternalHeaderContext
@@ -61,11 +75,32 @@ export function buildInternalHeaders(
 
   if (ctx.requestId)
     headers.set("X-Request-Id", sanitizeInternalHeaderValue(ctx.requestId));
-  if (ctx.internalServiceToken)
+
+  // SEC-INTERNAL-AUTH-2: Prefer JWT-based auth over legacy static token
+  const requestId = ctx.requestId || `req-${Date.now().toString(36)}`;
+  if (ctx.internalJwtSigningKey && ctx.serviceKey) {
+    const audience = mapServiceKeyToAudience(ctx.serviceKey);
+    if (audience) {
+      const token = signInternalJwt(ctx.internalJwtSigningKey, {
+        serviceKey: audience,
+        requestId,
+      });
+      headers.set("X-Internal-Service-Token", token);
+    } else if (ctx.internalServiceToken) {
+      // Fallback to legacy token for unknown service keys
+      headers.set(
+        "X-Internal-Service-Token",
+        sanitizeInternalHeaderValue(ctx.internalServiceToken)
+      );
+    }
+  } else if (ctx.internalServiceToken) {
+    // Legacy mode: use static token
     headers.set(
       "X-Internal-Service-Token",
       sanitizeInternalHeaderValue(ctx.internalServiceToken)
     );
+  }
+
   if (ctx.workspaceId)
     headers.set("X-Workspace-Id", sanitizeInternalHeaderValue(ctx.workspaceId));
   if (ctx.userId)
