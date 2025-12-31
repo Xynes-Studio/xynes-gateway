@@ -17,11 +17,15 @@ import type { RequestAuth } from "../types/requestAuth";
 import type { RateLimiter } from "../rateLimit/rateLimiter";
 import type { RateLimitContext } from "../rateLimit/types";
 import { extractClientIp } from "../rateLimit/keyBuilder";
+import type { BodyLimiter } from "../bodyLimit/bodyLimiter";
+import { safeJsonParse, JsonParseError } from "../bodyLimit/jsonParser";
+import { DEFAULT_MAX_BODY_BYTES } from "../bodyLimit/types";
 
 export interface DynamicRouterOptions {
   routes: Route[];
   authzService: IAuthzService;
   rateLimiter?: RateLimiter;
+  bodyLimiter?: BodyLimiter;
 }
 
 /**
@@ -34,10 +38,19 @@ interface RateLimitCheckResult {
   headers: Record<string, string>;
 }
 
+/**
+ * SEC-BODYLIMIT-1: Body limit check result.
+ */
+interface BodyLimitCheckResult {
+  /** If set, the body exceeds limits and this response should be returned */
+  response: Response | null;
+}
+
 export class DynamicRouter {
   private routes: Route[];
   private authzService: IAuthzService;
   private rateLimiter?: RateLimiter;
+  private bodyLimiter?: BodyLimiter;
 
   private static readonly AUTH_RESULT = Symbol("xynes.gateway.authResult");
 
@@ -62,6 +75,7 @@ export class DynamicRouter {
       this.routes = routesOrOptions.routes;
       this.authzService = routesOrOptions.authzService;
       this.rateLimiter = routesOrOptions.rateLimiter;
+      this.bodyLimiter = routesOrOptions.bodyLimiter;
     }
   }
 
@@ -78,6 +92,20 @@ export class DynamicRouter {
    */
   getRateLimiter(): RateLimiter | undefined {
     return this.rateLimiter;
+  }
+
+  /**
+   * SEC-BODYLIMIT-1: Set or update the body limiter instance.
+   */
+  setBodyLimiter(bodyLimiter: BodyLimiter): void {
+    this.bodyLimiter = bodyLimiter;
+  }
+
+  /**
+   * SEC-BODYLIMIT-1: Get the current body limiter instance (if any).
+   */
+  getBodyLimiter(): BodyLimiter | undefined {
+    return this.bodyLimiter;
   }
 
   private static readonly UNSAFE_PAYLOAD_KEYS = new Set([
@@ -418,16 +446,30 @@ export class DynamicRouter {
       actionEndpoint = `${serviceUrl}/internal/actions`;
     }
 
-    // Build Payload
+    // SEC-BODYLIMIT-1: Build Payload with safe JSON parsing
     let body: unknown = {};
     if (request.method !== "GET" && request.method !== "HEAD") {
       try {
-        // Clone request to avoid consuming body if we need it later (though we just consume it here)
-        // But we can't clone if we already read it?
-        // Better to just read it once.
-        body = await request.json();
-      } catch {
-        // ignore if no body
+        // Read raw body text first
+        const bodyText = await request.text();
+        if (bodyText && bodyText.trim().length > 0) {
+          // Use safe JSON parser with depth/size guards
+          body = safeJsonParse(bodyText);
+        }
+      } catch (err) {
+        // SEC-BODYLIMIT-1: Return safe error for malformed JSON
+        if (err instanceof JsonParseError) {
+          const errorResponse = createErrorResponse(
+            "INVALID_JSON",
+            "Invalid JSON payload",
+            reqId
+          );
+          return new Response(JSON.stringify(errorResponse), {
+            status: 400,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+        // For other errors (e.g., empty body), continue with empty object
       }
     }
 
@@ -629,6 +671,76 @@ export class DynamicRouter {
     return { response: null, headers: rateLimitHeaders };
   }
 
+  /**
+   * SEC-BODYLIMIT-1: Check body size limit for the matched route.
+   * Validates Content-Length against configured limits before reading body.
+   *
+   * @returns Object with response if body exceeds limit, null otherwise
+   */
+  private async checkBodyLimit(
+    match: RouteMatch,
+    request: Request,
+    requestId: string
+  ): Promise<BodyLimitCheckResult> {
+    // Skip body check for methods that don't have bodies
+    const method = request.method.toUpperCase();
+    if (method === "GET" || method === "HEAD" || method === "OPTIONS") {
+      return { response: null };
+    }
+
+    const { route } = match;
+
+    // Get Content-Length header
+    const contentLengthHeader = request.headers.get("Content-Length");
+    const contentLength = contentLengthHeader
+      ? parseInt(contentLengthHeader, 10)
+      : null;
+
+    // Determine the max body size for this route
+    let maxBodyBytes: number;
+
+    if (this.bodyLimiter) {
+      maxBodyBytes = await this.bodyLimiter.getMaxBytesForRoute(route.id);
+    } else {
+      // Fallback: use default if no body limiter configured
+      maxBodyBytes = DEFAULT_MAX_BODY_BYTES;
+    }
+
+    // If Content-Length is provided, validate against limit
+    if (contentLength !== null) {
+      // Special case: maxBodyBytes = 0 means no body allowed
+      if (maxBodyBytes === 0 && contentLength > 0) {
+        const errorResponse = createErrorResponse(
+          "BODY_NOT_ALLOWED",
+          "Request body not allowed for this endpoint.",
+          requestId
+        );
+        return {
+          response: new Response(JSON.stringify(errorResponse), {
+            status: 413,
+            headers: { "Content-Type": "application/json" },
+          }),
+        };
+      }
+
+      if (contentLength > maxBodyBytes) {
+        const errorResponse = createErrorResponse(
+          "PAYLOAD_TOO_LARGE",
+          "Request body too large.",
+          requestId
+        );
+        return {
+          response: new Response(JSON.stringify(errorResponse), {
+            status: 413,
+            headers: { "Content-Type": "application/json" },
+          }),
+        };
+      }
+    }
+
+    return { response: null };
+  }
+
   handle = async (c: Context) => {
     const requestId = c.get("requestId") || generateRequestId();
     const match = this.findMatch(c.req.method, c.req.path);
@@ -643,6 +755,17 @@ export class DynamicRouter {
           requestId
         );
         return c.json(errorResponse, auth.status);
+      }
+
+      // SEC-BODYLIMIT-1: Check body limit AFTER authorization but BEFORE rate limiting
+      // This rejects oversized requests early before consuming rate limit budget
+      const bodyLimitCheck = await this.checkBodyLimit(
+        match,
+        c.req.raw,
+        requestId
+      );
+      if (bodyLimitCheck.response) {
+        return bodyLimitCheck.response;
       }
 
       // SEC-RATELIMIT-1: Check rate limit AFTER authorization but BEFORE proxying
