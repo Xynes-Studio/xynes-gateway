@@ -120,16 +120,18 @@ describe("SEC-INT-1 internal auth (stack)", () => {
     const app = await createApp();
     const authToken = signHs256ForTest({ sub: "user-1", exp: 2_000_000_000 }, jwtSecret);
 
+    const bodyContent = JSON.stringify({ title: "hello" });
     const res = await app.request("/workspaces/ws-1/documents", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
+        "Content-Length": String(bodyContent.length),
         Authorization: `Bearer ${authToken}`,
         "X-XS-User-Id": "attacker",
         "X-Workspace-Id": "attacker-workspace",
         "X-Internal-Service-Token": "attacker-token",
       },
-      body: JSON.stringify({ title: "hello" }),
+      body: bodyContent,
     });
 
     expect(res.status).toBe(200);

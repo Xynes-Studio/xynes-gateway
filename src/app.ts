@@ -10,6 +10,7 @@ import { healthRoute } from "./routes/health.route";
 import { readyRoute } from "./routes/ready.route";
 import type { Route } from "./types";
 import { createRateLimiterFromConfig } from "./infra/rateLimitSetup";
+import { createBodyLimiterFromConfig } from "./infra/bodyLimitSetup";
 
 export const createApp = async () => {
   const app = new Hono();
@@ -176,7 +177,15 @@ export const createApp = async () => {
   // SEC-RATELIMIT-1: Initialize rate limiter with config repository
   const rateLimiter = createRateLimiterFromConfig();
 
-  const dynamicRouter = new DynamicRouter(routes, authzService, rateLimiter);
+  // SEC-BODYLIMIT-1: Initialize body limiter with config repository
+  const bodyLimiter = createBodyLimiterFromConfig();
+
+  const dynamicRouter = new DynamicRouter({
+    routes,
+    authzService,
+    rateLimiter,
+    bodyLimiter,
+  });
 
   // Dynamic Router Hook
   app.all("*", dynamicRouter.handle);

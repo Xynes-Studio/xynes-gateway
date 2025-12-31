@@ -124,13 +124,15 @@ describe("Gateway Integration", () => {
       return Promise.reject(new Error(`Unknown URL: ${urlStr}`));
     }) as unknown as typeof fetch;
 
+    const bodyContent = JSON.stringify({ title: "Test Doc" });
     const req = new Request(
       "http://localhost/workspaces/workspace-1/documents",
       {
         method: "POST",
-        body: JSON.stringify({ title: "Test Doc" }),
+        body: bodyContent,
         headers: {
           "Content-Type": "application/json",
+          "Content-Length": String(bodyContent.length),
           Authorization: `Bearer ${token}`,
           "X-XS-User-Id": "attacker",
           "X-Workspace-Id": "attacker-workspace",
@@ -371,13 +373,15 @@ describe("Gateway Integration", () => {
       return Promise.reject(new Error(`Unknown URL: ${urlStr}`));
     }) as unknown as typeof fetch;
 
+    const bodyContent = JSON.stringify({ name: "Acme", slug: "acme" });
     const res = await app.request("/workspaces", {
       method: "POST",
       headers: {
         Authorization: `Bearer ${token}`,
         "Content-Type": "application/json",
+        "Content-Length": String(bodyContent.length),
       },
-      body: JSON.stringify({ name: "Acme", slug: "acme" }),
+      body: bodyContent,
     });
 
     expect(res.status).toBe(201);
@@ -595,12 +599,15 @@ describe("Gateway Integration", () => {
   it("Matched dynamic route handled (mock logic)", async () => {
     const app = await createApp();
 
-    // matching request
+    // matching request - need Content-Length for body limit check
+    const bodyContent = JSON.stringify({});
     const res = await app.request("/workspaces/123/documents", {
       method: "POST",
       headers: {
         "X-XS-User-Id": "attacker",
+        "Content-Length": String(bodyContent.length),
       },
+      body: bodyContent,
     });
 
     // Since we are mocking AuthzService or it's calling valid URL,
@@ -825,6 +832,246 @@ describe("Gateway Integration", () => {
       await app.request("/workspaces/ws-1/content/blog", { method: "GET" });
 
       expect(capturedUserId).toBeNull();
+    });
+  });
+
+  /**
+   * SEC-BODYLIMIT-1: Body Size Limit Integration Tests
+   */
+  describe("Body Size Limits (SEC-BODYLIMIT-1)", () => {
+    it("should return 413 for oversized POST body", async () => {
+      const app = await createApp();
+      const token = signHs256ForTest(
+        { sub: "user-1", exp: 2_000_000_000 },
+        "test-jwt-secret"
+      );
+
+      // Mock authz service to allow the request
+      global.fetch = vi.fn((url: string | URL | Request) => {
+        const urlStr = url.toString();
+        if (urlStr.includes("/authz/check")) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({ ok: true, data: { allowed: true } }),
+              {
+                status: 200,
+              }
+            )
+          );
+        }
+        return Promise.reject(new Error(`Unexpected URL: ${urlStr}`));
+      }) as unknown as typeof fetch;
+
+      // Route "5" = comments create has small limit (16 KB default)
+      // Create body larger than limit
+      const largeBody = JSON.stringify({
+        content: "x".repeat(20000), // 20KB+ body, exceeds 16KB limit
+      });
+
+      const req = new Request(
+        "http://localhost/workspaces/ws-1/content-entries/entry-1/comments",
+        {
+          method: "POST",
+          body: largeBody,
+          headers: {
+            "Content-Type": "application/json",
+            "Content-Length": String(largeBody.length),
+            Authorization: `Bearer ${token}`,
+          },
+        }
+      );
+
+      const res = await app.request(req);
+
+      expect(res.status).toBe(413);
+      const body = (await res.json()) as {
+        ok: boolean;
+        error?: { code: string; message: string };
+      };
+      expect(body.ok).toBe(false);
+      expect(body.error?.code).toBe("PAYLOAD_TOO_LARGE");
+    });
+
+    it("should allow normal-sized POST body within limits", async () => {
+      const app = await createApp();
+      const token = signHs256ForTest(
+        { sub: "user-1", exp: 2_000_000_000 },
+        "test-jwt-secret"
+      );
+
+      global.fetch = vi.fn((url: string | URL | Request) => {
+        const urlStr = url.toString();
+        if (urlStr.includes("/authz/check")) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({ ok: true, data: { allowed: true } }),
+              {
+                status: 200,
+              }
+            )
+          );
+        }
+        if (urlStr.includes("/internal/cms-actions")) {
+          return Promise.resolve(
+            new Response(JSON.stringify({ id: "comment-1" }), { status: 201 })
+          );
+        }
+        if (urlStr.includes("/internal/telemetry-actions")) {
+          return Promise.resolve(
+            new Response(JSON.stringify({ id: "evt-1" }), { status: 201 })
+          );
+        }
+        return Promise.reject(new Error(`Unexpected URL: ${urlStr}`));
+      }) as unknown as typeof fetch;
+
+      // Small body within limits
+      const smallBody = JSON.stringify({
+        content: "This is a normal comment.",
+      });
+
+      const req = new Request(
+        "http://localhost/workspaces/ws-1/content-entries/entry-1/comments",
+        {
+          method: "POST",
+          body: smallBody,
+          headers: {
+            "Content-Type": "application/json",
+            "Content-Length": String(smallBody.length),
+            Authorization: `Bearer ${token}`,
+          },
+        }
+      );
+
+      const res = await app.request(req);
+
+      expect(res.status).toBe(201);
+    });
+
+    it("should return 400 for malformed JSON body", async () => {
+      const app = await createApp();
+      const token = signHs256ForTest(
+        { sub: "user-1", exp: 2_000_000_000 },
+        "test-jwt-secret"
+      );
+
+      global.fetch = vi.fn((url: string | URL | Request) => {
+        const urlStr = url.toString();
+        if (urlStr.includes("/authz/check")) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({ ok: true, data: { allowed: true } }),
+              {
+                status: 200,
+              }
+            )
+          );
+        }
+        return Promise.reject(new Error(`Unexpected URL: ${urlStr}`));
+      }) as unknown as typeof fetch;
+
+      // Invalid JSON
+      const invalidJson = "{not valid json}";
+
+      const req = new Request(
+        "http://localhost/workspaces/ws-1/content-entries/entry-1/comments",
+        {
+          method: "POST",
+          body: invalidJson,
+          headers: {
+            "Content-Type": "application/json",
+            "Content-Length": String(invalidJson.length),
+            Authorization: `Bearer ${token}`,
+          },
+        }
+      );
+
+      const res = await app.request(req);
+
+      expect(res.status).toBe(400);
+      const body = (await res.json()) as {
+        ok: boolean;
+        error?: { code: string; message: string };
+      };
+      expect(body.ok).toBe(false);
+      expect(body.error?.code).toBe("INVALID_JSON");
+      // Should not leak internal details
+      expect(body.error?.message).toBe("Invalid JSON payload");
+    });
+
+    it("should reject deeply nested JSON (JSON bomb protection)", async () => {
+      const app = await createApp();
+      const token = signHs256ForTest(
+        { sub: "user-1", exp: 2_000_000_000 },
+        "test-jwt-secret"
+      );
+
+      global.fetch = vi.fn((url: string | URL | Request) => {
+        const urlStr = url.toString();
+        if (urlStr.includes("/authz/check")) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({ ok: true, data: { allowed: true } }),
+              {
+                status: 200,
+              }
+            )
+          );
+        }
+        return Promise.reject(new Error(`Unexpected URL: ${urlStr}`));
+      }) as unknown as typeof fetch;
+
+      // Create deeply nested JSON (exceeds MAX_DEPTH of 32)
+      let deepJson = '"value"';
+      for (let i = 0; i < 40; i++) {
+        deepJson = `{"level${i}": ${deepJson}}`;
+      }
+
+      const req = new Request(
+        "http://localhost/workspaces/ws-1/content-entries/entry-1/comments",
+        {
+          method: "POST",
+          body: deepJson,
+          headers: {
+            "Content-Type": "application/json",
+            "Content-Length": String(deepJson.length),
+            Authorization: `Bearer ${token}`,
+          },
+        }
+      );
+
+      const res = await app.request(req);
+
+      expect(res.status).toBe(400);
+      const body = (await res.json()) as {
+        ok: boolean;
+        error?: { code: string };
+      };
+      expect(body.ok).toBe(false);
+      expect(body.error?.code).toBe("INVALID_JSON");
+    });
+
+    it("should skip body limit for GET requests", async () => {
+      const app = await createApp();
+
+      global.fetch = vi.fn((url: string | URL | Request) => {
+        const urlStr = url.toString();
+        if (urlStr.includes("/internal/cms-actions")) {
+          return Promise.resolve(
+            new Response(JSON.stringify({ entries: [] }), { status: 200 })
+          );
+        }
+        if (urlStr.includes("/internal/telemetry-actions")) {
+          return Promise.resolve(
+            new Response(JSON.stringify({ id: "evt-1" }), { status: 201 })
+          );
+        }
+        return Promise.reject(new Error(`Unexpected URL: ${urlStr}`));
+      }) as unknown as typeof fetch;
+
+      // GET requests should not be subject to body limits
+      const res = await app.request("/workspaces/ws-1/blog", { method: "GET" });
+
+      expect(res.status).toBe(200);
     });
   });
 });

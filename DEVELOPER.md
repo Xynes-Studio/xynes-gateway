@@ -364,6 +364,149 @@ export class RedisRateLimitStore implements IRateLimitStore {
 }
 ```
 
+## Request Body Limits (SEC-BODYLIMIT-1)
+
+The gateway enforces per-route body size limits to protect the platform against oversized bodies and JSON parse bombs.
+
+### Architecture
+
+```text
+┌──────────────┐     ┌─────────────────┐     ┌──────────────────┐
+│   Request    │────▶│  Body Limiter   │────▶│  Config Repo     │
+│   Context    │     │   (check)       │     │  (DB or static)  │
+└──────────────┘     └────────┬────────┘     └──────────────────┘
+                              │
+                              ▼
+                     ┌─────────────────┐
+                     │  Safe JSON      │
+                     │  Parser (depth  │
+                     │  & size guards) │
+                     └─────────────────┘
+```
+
+### Components
+
+- **`src/bodyLimit/types.ts`**: Type definitions for body limiting (BodyLimitConfig, presets, constants)
+- **`src/bodyLimit/configRepository.ts`**: Fetches body limit configs (cached from DB or static)
+- **`src/bodyLimit/bodyLimiter.ts`**: Orchestration service that coordinates config lookup and validation
+- **`src/bodyLimit/jsonParser.ts`**: Safe JSON parser with depth/size guards against JSON bomb attacks
+- **`src/middleware/bodyLimit.ts`**: Hono middleware for body limit enforcement
+- **`src/infra/bodyLimitSetup.ts`**: Factory functions for body limiter initialization
+
+### Configuration
+
+Body limits are configured per-route in `platform.routes.max_body_bytes`:
+
+```sql
+-- Add max_body_bytes column to routes table
+ALTER TABLE platform.routes ADD COLUMN max_body_bytes INTEGER;
+
+-- Example: Set 16 KB limit for comments endpoint
+UPDATE platform.routes 
+SET max_body_bytes = 16384 
+WHERE action_key = 'cms.comments.create';
+```
+
+| Value | Behavior |
+|-------|----------|
+| `NULL` | Use default limit (1 MB) |
+| `0` | Reject all bodies (useful for GET-only routes) |
+| `> 0` | Maximum allowed body size in bytes |
+
+### Preset Limits
+
+Common body limit presets are available in `BODY_LIMIT_PRESETS`:
+
+| Preset | Size | Use Case |
+|--------|------|----------|
+| `TINY` | 8 KB | Simple form submissions |
+| `SMALL` | 16 KB | Comments, short content |
+| `MEDIUM` | 64 KB | Telemetry, moderate JSON |
+| `DEFAULT` | 1 MB | General API requests |
+| `LARGE` | 5 MB | Document uploads, rich content |
+| `NONE` | 0 | Reject all bodies |
+
+### JSON Parsing Guards
+
+The gateway uses safe JSON parsing with the following guards:
+
+| Guard | Default Limit | Purpose |
+|-------|--------------|---------|
+| `MAX_DEPTH` | 32 | Prevent deeply nested JSON bombs |
+| `MAX_KEY_LENGTH` | 512 bytes | Limit object key sizes |
+| `MAX_STRING_LENGTH` | 1 MB | Limit string value sizes |
+| `MAX_KEYS` | 10,000 | Limit number of object keys |
+| `MAX_ARRAY_LENGTH` | 100,000 | Limit array sizes |
+
+### Response on Limit Exceeded
+
+When body limit is exceeded, the gateway returns 413 with the standard error envelope:
+
+```json
+{
+  "ok": false,
+  "error": {
+    "code": "PAYLOAD_TOO_LARGE",
+    "message": "Request body too large."
+  },
+  "meta": { "requestId": "req_..." }
+}
+```
+
+For routes with `max_body_bytes = 0`:
+
+```json
+{
+  "ok": false,
+  "error": {
+    "code": "BODY_NOT_ALLOWED",
+    "message": "Request body not allowed for this endpoint."
+  },
+  "meta": { "requestId": "req_..." }
+}
+```
+
+### Response on Malformed JSON
+
+When JSON parsing fails, the gateway returns 400 with a **safe, non-leaky** error message:
+
+```json
+{
+  "ok": false,
+  "error": {
+    "code": "INVALID_JSON",
+    "message": "Invalid JSON payload"
+  },
+  "meta": { "requestId": "req_..." }
+}
+```
+
+Note: Error messages never include internal details like stack traces or parse positions.
+
+### Request Flow
+
+1. **Authorization**: Request is first authenticated/authorized
+2. **Body Limit Check**: Content-Length is validated against route's max_body_bytes (fails fast with 413)
+3. **Rate Limit Check**: Request is checked against rate limits
+4. **Body Parsing**: Request body is parsed using safe JSON parser with depth/size guards
+5. **Proxy**: Request is forwarded to downstream service
+
+### Development vs Production
+
+- **Development**: Uses `StaticBodyLimitConfigRepository` with default configs when `DATABASE_URL` is not set
+- **Production**: Uses `CachedBodyLimitConfigRepository` to fetch configs from DB with TTL-based caching
+
+### Adding Body Limits
+
+1. Update the route in `platform.routes`:
+```sql
+UPDATE platform.routes 
+SET max_body_bytes = 16384  -- 16 KB
+WHERE action_key = 'cms.comments.create';
+```
+
+2. The gateway will pick up the config on next cache refresh (default: 1 min TTL)
+
 #### Supabase Auth (GATEWAY-AUTH-2)
 
 To use Supabase as the JWT authority (recommended), configure RS256 validation via Supabase JWKS:

@@ -434,25 +434,24 @@ describe("DynamicRouter", () => {
       const route = mockRoutes[0]!;
       const match = { route, params: { workspaceId: "123" } };
 
+      // SEC-BODYLIMIT-1: Now using text() + safeJsonParse, so mock text()
       const req = {
         method: "POST",
         headers: new Headers(),
         url: "http://localhost/workspaces/123/documents",
-        json: vi.fn().mockRejectedValue(new Error("Invalid JSON")),
+        text: vi.fn().mockResolvedValue("{invalid json}"),
       } as unknown as Request;
 
-      (global.fetch as unknown as MockFn).mockResolvedValue(
-        new Response("{}", { status: 200 })
-      );
+      // Should return 400 for invalid JSON
+      const response = await router.proxyRequest(match, req, {});
+      expect(response.status).toBe(400);
 
-      await router.proxyRequest(match, req, {});
-
-      // Should proceed with empty body
-      const callArgs = (global.fetch as unknown as MockFn).mock.calls[0];
-      if (!callArgs) throw new Error("Fetch not called");
-
-      const sentBody = JSON.parse(callArgs[1].body);
-      expect(sentBody.payload).toEqual({});
+      const body = (await response.json()) as {
+        ok: boolean;
+        error?: { code: string };
+      };
+      expect(body.ok).toBe(false);
+      expect(body.error?.code).toBe("INVALID_JSON");
     });
 
     it("should send telemetry event on successful proxy", async () => {
