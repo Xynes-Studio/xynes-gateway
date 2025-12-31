@@ -105,7 +105,7 @@ The gateway emits standardized, sanitized telemetry events for all HTTP requests
 
 ### Architecture
 
-```
+```text
 ┌───────────────────┐     ┌────────────────────┐     ┌─────────────────────┐
 │   Gateway         │     │  Sanitization      │     │  Telemetry Service  │
 │   (request)       │────▶│  + Event Builder   │────▶│  (ingestion)        │
