@@ -690,11 +690,44 @@ export class DynamicRouter {
 
     const { route } = match;
 
-    // Get Content-Length header
+    // Get Content-Length header and validate strictly
     const contentLengthHeader = request.headers.get("Content-Length");
-    const contentLength = contentLengthHeader
-      ? parseInt(contentLengthHeader, 10)
-      : null;
+    let contentLength: number | null = null;
+    if (contentLengthHeader !== null) {
+      // Strict validation: only digits allowed
+      if (/^\d+$/.test(contentLengthHeader)) {
+        const parsed = parseInt(contentLengthHeader, 10);
+        if (Number.isSafeInteger(parsed) && parsed >= 0) {
+          contentLength = parsed;
+        } else {
+          // Invalid Content-Length (overflow or negative)
+          const errorResponse = createErrorResponse(
+            "INVALID_CONTENT_LENGTH",
+            "Invalid Content-Length header.",
+            requestId
+          );
+          return {
+            response: new Response(JSON.stringify(errorResponse), {
+              status: 400,
+              headers: { "Content-Type": "application/json" },
+            }),
+          };
+        }
+      } else {
+        // Content-Length contains non-digit characters
+        const errorResponse = createErrorResponse(
+          "INVALID_CONTENT_LENGTH",
+          "Invalid Content-Length header.",
+          requestId
+        );
+        return {
+          response: new Response(JSON.stringify(errorResponse), {
+            status: 400,
+            headers: { "Content-Type": "application/json" },
+          }),
+        };
+      }
+    }
 
     // Determine the max body size for this route
     let maxBodyBytes: number;
@@ -704,6 +737,22 @@ export class DynamicRouter {
     } else {
       // Fallback: use default if no body limiter configured
       maxBodyBytes = DEFAULT_MAX_BODY_BYTES;
+    }
+
+    // SEC-BODYLIMIT-1: Reject requests without Content-Length for non-zero body limits
+    // This prevents streaming bodies from bypassing size validation
+    if (contentLength === null && maxBodyBytes > 0) {
+      const errorResponse = createErrorResponse(
+        "CONTENT_LENGTH_REQUIRED",
+        "Content-Length header is required.",
+        requestId
+      );
+      return {
+        response: new Response(JSON.stringify(errorResponse), {
+          status: 411, // 411 Length Required
+          headers: { "Content-Type": "application/json" },
+        }),
+      };
     }
 
     // If Content-Length is provided, validate against limit

@@ -259,6 +259,90 @@ describe("Body Limit Middleware", () => {
       };
       expect(body.meta?.requestId).toBe("test-request-id");
     });
+
+    it("should return 400 for invalid Content-Length (non-digits)", async () => {
+      app.use(
+        "*",
+        bodyLimitMiddleware({
+          bodyLimiter,
+          getRouteId: () => "small-route",
+        })
+      );
+
+      app.post("/test", (c) => c.json({ ok: true }));
+
+      const res = await app.request("/test", {
+        method: "POST",
+        body: "test body",
+        headers: {
+          "Content-Type": "application/json",
+          "Content-Length": "abc",
+        },
+      });
+
+      expect(res.status).toBe(400);
+      const body = (await res.json()) as {
+        ok: boolean;
+        error?: { code: string };
+      };
+      expect(body.error?.code).toBe("INVALID_CONTENT_LENGTH");
+    });
+
+    it("should return 400 for negative Content-Length", async () => {
+      app.use(
+        "*",
+        bodyLimitMiddleware({
+          bodyLimiter,
+          getRouteId: () => "small-route",
+        })
+      );
+
+      app.post("/test", (c) => c.json({ ok: true }));
+
+      const res = await app.request("/test", {
+        method: "POST",
+        body: "test body",
+        headers: {
+          "Content-Type": "application/json",
+          "Content-Length": "-1",
+        },
+      });
+
+      expect(res.status).toBe(400);
+      const body = (await res.json()) as {
+        ok: boolean;
+        error?: { code: string };
+      };
+      expect(body.error?.code).toBe("INVALID_CONTENT_LENGTH");
+    });
+
+    it("should return 411 for requests without Content-Length header", async () => {
+      app.use(
+        "*",
+        bodyLimitMiddleware({
+          bodyLimiter,
+          getRouteId: () => "small-route",
+        })
+      );
+
+      app.post("/test", (c) => c.json({ ok: true }));
+
+      const res = await app.request("/test", {
+        method: "POST",
+        body: "test body",
+        headers: {
+          "Content-Type": "application/json",
+          // No Content-Length header
+        },
+      });
+
+      expect(res.status).toBe(411);
+      const body = (await res.json()) as {
+        ok: boolean;
+        error?: { code: string };
+      };
+      expect(body.error?.code).toBe("CONTENT_LENGTH_REQUIRED");
+    });
   });
 
   describe("createBodyLimitChecker", () => {

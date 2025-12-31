@@ -370,7 +370,7 @@ The gateway enforces per-route body size limits to protect the platform against 
 
 ### Architecture
 
-```
+```text
 ┌──────────────┐     ┌─────────────────┐     ┌──────────────────┐
 │   Request    │────▶│  Body Limiter   │────▶│  Config Repo     │
 │   Context    │     │   (check)       │     │  (DB or static)  │

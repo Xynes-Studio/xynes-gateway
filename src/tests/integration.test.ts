@@ -124,13 +124,15 @@ describe("Gateway Integration", () => {
       return Promise.reject(new Error(`Unknown URL: ${urlStr}`));
     }) as unknown as typeof fetch;
 
+    const bodyContent = JSON.stringify({ title: "Test Doc" });
     const req = new Request(
       "http://localhost/workspaces/workspace-1/documents",
       {
         method: "POST",
-        body: JSON.stringify({ title: "Test Doc" }),
+        body: bodyContent,
         headers: {
           "Content-Type": "application/json",
+          "Content-Length": String(bodyContent.length),
           Authorization: `Bearer ${token}`,
           "X-XS-User-Id": "attacker",
           "X-Workspace-Id": "attacker-workspace",
@@ -371,13 +373,15 @@ describe("Gateway Integration", () => {
       return Promise.reject(new Error(`Unknown URL: ${urlStr}`));
     }) as unknown as typeof fetch;
 
+    const bodyContent = JSON.stringify({ name: "Acme", slug: "acme" });
     const res = await app.request("/workspaces", {
       method: "POST",
       headers: {
         Authorization: `Bearer ${token}`,
         "Content-Type": "application/json",
+        "Content-Length": String(bodyContent.length),
       },
-      body: JSON.stringify({ name: "Acme", slug: "acme" }),
+      body: bodyContent,
     });
 
     expect(res.status).toBe(201);
@@ -595,12 +599,15 @@ describe("Gateway Integration", () => {
   it("Matched dynamic route handled (mock logic)", async () => {
     const app = await createApp();
 
-    // matching request
+    // matching request - need Content-Length for body limit check
+    const bodyContent = JSON.stringify({});
     const res = await app.request("/workspaces/123/documents", {
       method: "POST",
       headers: {
         "X-XS-User-Id": "attacker",
+        "Content-Length": String(bodyContent.length),
       },
+      body: bodyContent,
     });
 
     // Since we are mocking AuthzService or it's calling valid URL,

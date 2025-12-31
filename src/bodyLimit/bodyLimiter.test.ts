@@ -145,19 +145,19 @@ describe("BodyLimiter", () => {
       expect(result.maxBytes).toBe(DEFAULT_MAX_BODY_BYTES); // Uses default, not 1000
     });
 
-    it("should handle null contentLength (no Content-Length header)", async () => {
+    it("should reject requests without Content-Length header", async () => {
       const context: BodyLimitContext = {
         routeId: "small-route",
         contentLength: null,
       };
 
-      // When Content-Length is null, we can't pre-check size
-      // The result depends on implementation - typically allow but stream-check
+      // SEC-BODYLIMIT-1: Requests without Content-Length are rejected to prevent
+      // streaming bodies from bypassing size limits
       const result = await bodyLimiter.check(context);
 
-      // Returns allowed with unknown size, actual check happens during streaming
-      expect(result.allowed).toBe(true);
-      expect(result.bodySize).toBe(0);
+      expect(result.allowed).toBe(false);
+      expect(result.errorCode).toBe("CONTENT_LENGTH_REQUIRED");
+      expect(result.errorMessage).toBe("Content-Length header is required.");
     });
 
     it("should use actualBodySize if provided (for streaming)", async () => {

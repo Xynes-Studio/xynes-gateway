@@ -72,7 +72,7 @@ export interface BodyLimitCheckResult {
   /** Actual or declared body size */
   bodySize: number;
   /** Error code if not allowed */
-  errorCode?: "PAYLOAD_TOO_LARGE" | "BODY_NOT_ALLOWED";
+  errorCode?: "PAYLOAD_TOO_LARGE" | "BODY_NOT_ALLOWED" | "CONTENT_LENGTH_REQUIRED";
   /** Human-readable error message */
   errorMessage?: string;
 }
@@ -86,26 +86,6 @@ export interface IBodyLimitConfigRepository {
    * Returns null if no explicit limit is configured (use default).
    */
   getConfigForRoute(routeId: string): Promise<BodyLimitConfig | null>;
-}
-
-/**
- * Store interface for caching body limit lookups.
- */
-export interface IBodyLimitStore {
-  /**
-   * Get cached configuration for a route.
-   */
-  get(routeId: string): BodyLimitConfig | null;
-
-  /**
-   * Set configuration in cache.
-   */
-  set(routeId: string, config: BodyLimitConfig): void;
-
-  /**
-   * Clear all cached entries.
-   */
-  clear(): void;
 }
 
 /**

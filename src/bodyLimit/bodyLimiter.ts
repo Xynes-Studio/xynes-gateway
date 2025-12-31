@@ -70,15 +70,18 @@ export class BodyLimiter {
       };
     }
 
-    // If no Content-Length and no actual size, allow through (stream check later)
+    // SEC-BODYLIMIT-1: Reject requests without Content-Length for non-zero body limits
+    // This prevents streaming bodies from bypassing size validation
     if (
       context.contentLength === null &&
       context.actualBodySize === undefined
     ) {
       return {
-        allowed: true,
+        allowed: false,
         maxBytes,
         bodySize: 0,
+        errorCode: "CONTENT_LENGTH_REQUIRED",
+        errorMessage: "Content-Length header is required.",
       };
     }
 

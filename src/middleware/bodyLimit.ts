@@ -55,11 +55,32 @@ export function bodyLimitMiddleware(
       return next();
     }
 
-    // Get Content-Length header
+    // Get Content-Length header and validate strictly
     const contentLengthHeader = c.req.header("Content-Length");
-    const contentLength = contentLengthHeader
-      ? parseInt(contentLengthHeader, 10)
-      : null;
+    let contentLength: number | null = null;
+    if (contentLengthHeader !== undefined && contentLengthHeader !== null) {
+      // Strict validation: only digits allowed
+      if (!/^\d+$/.test(contentLengthHeader)) {
+        const requestId = c.get("requestId") || generateRequestId();
+        const errorResponse = createErrorResponse(
+          "INVALID_CONTENT_LENGTH",
+          "Invalid Content-Length header.",
+          requestId
+        );
+        return c.json(errorResponse, 400);
+      }
+      const parsed = parseInt(contentLengthHeader, 10);
+      if (!Number.isSafeInteger(parsed) || parsed < 0) {
+        const requestId = c.get("requestId") || generateRequestId();
+        const errorResponse = createErrorResponse(
+          "INVALID_CONTENT_LENGTH",
+          "Invalid Content-Length header.",
+          requestId
+        );
+        return c.json(errorResponse, 400);
+      }
+      contentLength = parsed;
+    }
 
     // Check body limit
     const result = await bodyLimiter.check({
@@ -78,7 +99,9 @@ export function bodyLimitMiddleware(
         requestId
       );
 
-      return c.json(errorResponse, 413);
+      // Use 411 for missing Content-Length, 413 for oversized bodies
+      const statusCode = errorCode === "CONTENT_LENGTH_REQUIRED" ? 411 : 413;
+      return c.json(errorResponse, statusCode);
     }
 
     return next();
@@ -131,11 +154,19 @@ export function createBodyLimitChecker(
       return { allowed: true, maxBytes };
     }
 
-    // Get Content-Length header
+    // Get Content-Length header and validate strictly
     const contentLengthHeader = request.headers.get("Content-Length");
-    const contentLength = contentLengthHeader
-      ? parseInt(contentLengthHeader, 10)
-      : null;
+    let contentLength: number | null = null;
+    if (contentLengthHeader !== null) {
+      // Strict validation: only digits allowed, must be safe integer >= 0
+      if (/^\d+$/.test(contentLengthHeader)) {
+        const parsed = parseInt(contentLengthHeader, 10);
+        if (Number.isSafeInteger(parsed) && parsed >= 0) {
+          contentLength = parsed;
+        }
+      }
+      // If validation fails, contentLength stays null (treated as unknown)
+    }
 
     // Check body limit
     const result = await bodyLimiter.check({
