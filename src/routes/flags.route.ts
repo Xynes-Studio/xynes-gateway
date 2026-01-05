@@ -42,16 +42,13 @@ export async function defaultAuthVerifier(
   if (!token) return null;
 
   try {
-    const claims = await verifyJwt(
-      token,
-      {
-        hs256Secret: config.auth.jwtSecret,
-        publicKeyPem: config.auth.jwtPublicKey,
-        jwksUrl: config.auth.jwksUrl,
-        issuer: config.auth.jwtIssuer,
-        audience: config.auth.jwtAudience,
-      }
-    );
+    const claims = await verifyJwt(token, {
+      hs256Secret: config.auth.jwtSecret,
+      publicKeyPem: config.auth.jwtPublicKey,
+      jwksUrl: config.auth.jwksUrl,
+      issuer: config.auth.jwtIssuer,
+      audience: config.auth.jwtAudience,
+    });
 
     if (claims?.sub) {
       return { userId: String(claims.sub) };
