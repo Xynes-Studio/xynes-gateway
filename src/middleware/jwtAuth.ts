@@ -65,12 +65,8 @@ export async function jwtAuthMiddleware(
         hs256Secret: config.auth.jwtSecret,
         publicKeyPem: config.auth.jwtPublicKey,
         jwksUrl: config.auth.jwksUrl,
-      },
-      {
-        requirements: {
-          issuer: config.auth.jwtIssuer,
-          audience: config.auth.jwtAudience,
-        },
+        issuer: config.auth.jwtIssuer,
+        audience: config.auth.jwtAudience,
       }
     );
 
