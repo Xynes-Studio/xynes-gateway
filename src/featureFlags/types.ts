@@ -39,48 +39,61 @@ export interface AllFlagsResult {
 }
 
 /**
- * Default feature flag values.
+ * Default feature flag values (snake_case to match PostHog convention).
  * Used as fallback when PostHog is unreachable.
  *
  * SECURITY: Defaults should be conservative (false for new features).
  */
 export const DEFAULT_FLAGS: Record<string, boolean> = {
-  // Auth features
-  enableMFA: false,
-  enableOAuthGoogle: true,
-  enableOAuthGitHub: true,
-  enableOAuthApple: false,
+  // Auth features (login/signup page)
+  xynes_auth_email_signup: true,
+  xynes_auth_mfa: false,
+  xynes_auth_oauth_google: true,
+  xynes_auth_oauth_github: true,
+  xynes_auth_oauth_apple: false,
+  xynes_auth_session_management: false,
+  xynes_auth_rate_limit_ui: true,
+  xynes_auth_remember_me: true,
+  xynes_auth_password_reset: true,
+  xynes_auth_profile_edit: true,
 
   // Workspace features
-  enableInvites: true,
-  enableMultipleWorkspaces: true,
-  enableWorkspaceCreation: true,
+  xynes_invite_system: true,
+  xynes_invite_revocation: true,
+  xynes_workspace_multiple: true,
+  xynes_workspace_switching: true,
+  xynes_workspace_creation: true,
 
   // Security/Operational
-  maintenanceMode: false,
-  enableRateLimitUI: true,
-
-  // Password/Profile
-  enablePasswordReset: true,
-  enableProfileEdit: true,
+  xynes_maintenance_mode: false,
 };
 
 /**
  * Public flags that can be returned without authentication.
- * These are safe to expose on login/signup pages.
- *
- * SECURITY: Only include flags that don't reveal sensitive
- * business logic or targeting information.
+ * Most feature flags are pre-auth (needed on login/signup pages).
  */
 export const PUBLIC_FLAG_KEYS: string[] = [
-  // OAuth providers - needed on login page
-  "enableOAuthGoogle",
-  "enableOAuthGitHub",
-  "enableOAuthApple",
-  // Maintenance mode - show maintenance banner
-  "maintenanceMode",
-  // Password reset - show/hide forgot password link
-  "enablePasswordReset",
+  // Auth features (login/signup page)
+  "xynes_auth_email_signup",
+  "xynes_auth_mfa",
+  "xynes_auth_oauth_google",
+  "xynes_auth_oauth_github",
+  "xynes_auth_oauth_apple",
+  "xynes_auth_session_management",
+  "xynes_auth_rate_limit_ui",
+  "xynes_auth_remember_me",
+  "xynes_auth_password_reset",
+  "xynes_auth_profile_edit",
+
+  // Workspace features
+  "xynes_invite_system",
+  "xynes_invite_revocation",
+  "xynes_workspace_multiple",
+  "xynes_workspace_switching",
+  "xynes_workspace_creation",
+
+  // Operational
+  "xynes_maintenance_mode",
 ];
 
 /**
