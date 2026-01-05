@@ -18,6 +18,11 @@ vi.module("../infra/config", () => ({
       authz: "http://authz.local",
       telemetry: "http://telemetry.local",
     },
+    // INFRA-BE-1: PostHog Feature Flags (empty key = disabled in tests)
+    posthog: {
+      apiKey: "",
+      host: "https://app.posthog.com",
+    },
   },
 }));
 

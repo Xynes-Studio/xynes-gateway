@@ -19,7 +19,22 @@ vi.module("../infra/config", () => ({
       authz: "http://localhost:3002",
       telemetry: "http://localhost:3004",
     },
+    // INFRA-BE-1: PostHog Feature Flags (empty key = disabled in tests)
+    posthog: {
+      apiKey: "",
+      host: "https://app.posthog.com",
+    },
   },
+}));
+
+// Mock body limit setup to use static config (avoids database dependency)
+const { createBodyLimiterWithStaticConfig, getDefaultBodyLimitConfigs } =
+  await import("../infra/bodyLimitSetup");
+vi.module("../infra/bodyLimitSetup", () => ({
+  createBodyLimiterFromConfig: () =>
+    createBodyLimiterWithStaticConfig(getDefaultBodyLimitConfigs()),
+  createBodyLimiterWithStaticConfig,
+  getDefaultBodyLimitConfigs,
 }));
 
 const { createApp } = await import("../app");
