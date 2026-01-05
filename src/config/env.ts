@@ -23,4 +23,9 @@ export const config = {
     authz: process.env.AUTHZ_SERVICE_URL!,
     telemetry: process.env.TELEMETRY_SERVICE_URL!,
   },
+  // INFRA-BE-1: PostHog Feature Flags
+  posthog: {
+    apiKey: process.env.POSTHOG_API_KEY || "",
+    host: process.env.POSTHOG_HOST || "https://app.posthog.com",
+  },
 };

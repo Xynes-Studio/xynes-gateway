@@ -8,6 +8,8 @@ import { AuthzService } from "./services/authzService";
 import { config } from "./infra/config";
 import { healthRoute } from "./routes/health.route";
 import { readyRoute } from "./routes/ready.route";
+import { createFlagsRoute } from "./routes/flags.route";
+import { FeatureFlagService } from "./featureFlags";
 import type { Route } from "./types";
 import { createRateLimiterFromConfig } from "./infra/rateLimitSetup";
 import { createBodyLimiterFromConfig } from "./infra/bodyLimitSetup";
@@ -20,9 +22,19 @@ export const createApp = async () => {
   app.use("*", logger);
   app.onError(errorHandler);
 
-  // Routes
+  // Routes - Health/Ready (no auth)
   app.route("/", healthRoute);
   app.route("/", readyRoute);
+
+  // INFRA-BE-1: Feature Flags Service & Route
+  const featureFlagService = new FeatureFlagService({
+    apiKey: config.posthog.apiKey,
+    host: config.posthog.host,
+  });
+  const flagsRoute = createFlagsRoute(featureFlagService);
+
+  // Mount flags route (auth handled inside route for combined public/private access)
+  app.route("/flags", flagsRoute);
 
   // Dependencies
   const authzService = new AuthzService(

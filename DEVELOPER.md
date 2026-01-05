@@ -38,8 +38,11 @@ These conventions are enforced to keep the gateway consistent with broader platf
   - `src/utils/**`: pure helpers (JWT verification, URL sanitation, request IDs, error mapping).
   - `src/services/**`: outbound integrations (authz, downstream proxy helpers).
   - `src/telemetry/**`: telemetry module (types, sanitization, service client).
-  - `src/middleware/**`: Hono middleware only (logging, error handling, request IDs, rate limiting).
+  - `src/featureFlags/**`: PostHog feature flags module (INFRA-BE-1).
+  - `src/middleware/**`: Hono middleware only (logging, error handling, request IDs, rate limiting, auth).
   - `src/rateLimit/**`: rate limiting module (types, key builder, config repository, stores).
+  - `src/bodyLimit/**`: request body size limiting module.
+  - `src/routes/**`: standalone route handlers (health, ready, flags).
   - `src/infra/**`: infrastructure setup (config, DB, rate limit initialization).
   - `src/tests/**`: integration/stack tests (unit tests stay colocated as `*.test.ts`).
 
@@ -184,6 +187,164 @@ bun test src/telemetry/sanitize.test.ts
 - ✅ User agents are truncated to prevent oversized payloads
 - ✅ Telemetry failures do not affect request handling
 - ✅ All code paths emit telemetry (success, auth failure, rate limit, 404)
+
+## Feature Flags (INFRA-BE-1)
+
+The gateway provides a backend-only PostHog integration for feature flags. Frontend clients call the gateway API rather than PostHog directly, enabling server-side targeting and security.
+
+### Architecture
+
+```text
+┌──────────────┐     ┌─────────────────┐     ┌───────────────┐
+│   Frontend   │────▶│   Gateway       │────▶│   PostHog     │
+│   (client)   │     │   /flags API    │     │   (SaaS)      │
+└──────────────┘     └─────────────────┘     └───────────────┘
+```
+
+### Module Structure (`src/featureFlags/`)
+
+| File | Purpose | Coverage |
+|------|---------|----------|
+| `types.ts` | Type definitions, interfaces, `DEFAULT_FLAGS`, `PUBLIC_FLAG_KEYS`, `filterPublicFlags` | 100% |
+| `service.ts` | `FeatureFlagService` - PostHog-backed service with graceful fallbacks | 100% |
+| `service.test.ts` | Unit tests for the service (mocks PostHog module) | - |
+| `index.ts` | Module exports | 100% |
+
+Route handler: `src/routes/flags.route.ts` (99% coverage)
+
+### API Endpoints
+
+| Endpoint | Method | Auth | Description |
+|----------|--------|------|-------------|
+| `/flags` | GET | Optional | Returns all flags (personalized if authed, public-only if not) |
+| `/flags/:key` | GET | Conditional | Public flags: no auth required. Private flags: auth required |
+
+### Combined Auth Approach
+
+The flags API uses a "combined auth" pattern to solve the chicken-and-egg problem where OAuth provider flags need to be available on the login page before the user is authenticated:
+
+- **GET /flags** - Always returns 200:
+  - With valid JWT: Returns ALL flags personalized for the user, `authenticated: true`
+  - Without/invalid JWT: Returns PUBLIC flags only, `authenticated: false`
+
+- **GET /flags/:key** - Returns 200 or 401:
+  - Public flags (`enableOAuthGoogle`, `enableOAuthGitHub`, etc.): Always accessible
+  - Private flags (`enableMFA`, `enableInvites`, etc.): Requires valid JWT
+
+### Public Flags
+
+```typescript
+const PUBLIC_FLAG_KEYS = [
+  "enableOAuthGoogle",
+  "enableOAuthGitHub", 
+  "enableOAuthApple",
+  "maintenanceMode",
+  "enablePasswordReset",
+];
+```
+
+### Response Schema
+
+```typescript
+// GET /flags (authenticated)
+{
+  "flags": {
+    "enableMFA": false,
+    "enableOAuthGoogle": true,
+    "enableInvites": true,
+    // ... all flags
+  },
+  "authenticated": true
+}
+
+// GET /flags (unauthenticated - public flags only)
+{
+  "flags": {
+    "enableOAuthGoogle": true,
+    "enableOAuthGitHub": true,
+    "maintenanceMode": false,
+    // ... only public flags
+  },
+  "authenticated": false
+}
+
+// GET /flags/:key
+{
+  "key": "enableMFA",
+  "enabled": false,
+  "variant": null
+}
+```
+
+### Default Flags
+
+When PostHog is unreachable or returns undefined, the service falls back to conservative defaults:
+
+```typescript
+const DEFAULT_FLAGS = {
+  enableMFA: false,              // New feature - conservative default
+  enableOAuthGoogle: true,       // Core feature - enabled
+  enableOAuthGitHub: true,       // Core feature - enabled
+  enableOAuthApple: false,       // New feature - conservative default
+  enableInvites: true,           // Core feature - enabled
+  enableMultipleWorkspaces: false,
+  enableWorkspaceCreation: true,
+  maintenanceMode: false,
+  enableRateLimitUI: false,
+  enablePasswordReset: true,
+  enableProfileEdit: true,
+};
+```
+
+### Environment Variables
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `POSTHOG_API_KEY` | No | `""` | PostHog project API key. If empty, service returns defaults. |
+| `POSTHOG_HOST` | No | `https://app.posthog.com` | PostHog host URL |
+
+### Security Measures
+
+- **API Key Protection**: PostHog API key is never logged or exposed to clients
+- **Combined Auth**: Public flags accessible without auth; private flags require JWT
+- **User Context**: User ID and workspace ID are passed to PostHog for targeting
+- **Fail-Safe Defaults**: Service returns safe defaults if PostHog is unreachable
+
+### Testing
+
+```bash
+# Run feature flags tests
+bun test src/featureFlags/
+
+# Run route tests
+bun test src/routes/flags.route.test.ts
+```
+
+### Usage Example
+
+```bash
+# Get all flags (with JWT auth - returns personalized flags)
+curl -H "Authorization: Bearer <token>" \
+     http://localhost:4100/flags
+
+# Get public flags (no auth - returns public flags only)
+curl http://localhost:4100/flags
+
+# Get specific public flag (no auth required)
+curl http://localhost:4100/flags/enableOAuthGoogle
+
+# Get specific private flag (requires JWT auth)
+curl -H "Authorization: Bearer <token>" \
+     http://localhost:4100/flags/enableMFA
+```
+
+### Acceptance Criteria
+
+- ✅ Combined auth: public flags without auth, private flags with JWT
+- ✅ User context (userId, workspaceId) passed to PostHog for targeting
+- ✅ Graceful fallback to defaults when PostHog is unavailable
+- ✅ API key never exposed to clients or logs
+- ✅ 80%+ test coverage (achieved: service 100%, route 99%)
 
 ## Telemetry URL Redaction (SEC-GW-URL-1)
 
