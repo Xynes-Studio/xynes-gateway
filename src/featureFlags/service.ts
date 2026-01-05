@@ -43,9 +43,10 @@ export class FeatureFlagService implements IFeatureFlagService {
     if (this.isEnabled) {
       this.client = new PostHog(config.apiKey, {
         host: config.host || "https://app.posthog.com",
-        // Disable automatic event capture - we only want feature flags
+        // Disable automatic event/exception capture - we only want feature flags
         flushAt: 1,
         flushInterval: 0,
+        enableExceptionAutocapture: false,
       });
     }
   }
@@ -88,6 +89,7 @@ export class FeatureFlagService implements IFeatureFlagService {
 
       const result = await this.client.isFeatureEnabled(key, context.userId, {
         personProperties,
+        sendFeatureFlagEvents: false,
       });
 
       // PostHog returns undefined if flag doesn't exist, use default

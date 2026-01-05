@@ -169,14 +169,15 @@ export function createFlagsRoute(
     const isPublicFlag = PUBLIC_FLAG_KEYS.includes(key);
     const auth = await tryAuthenticate(c.req.header("Authorization"));
 
-    // If not a public flag)
+    // If not a public flag, require authentication
     if (!isPublicFlag && !auth) {
+      console.warn(`[flags.route] Unauthorized access to private flag: ${key}`);
       return c.json(
         {
           ok: false,
           error: {
             code: "UNAUTHORIZED",
-            message: `Flag '${key}' requires authentication`,
+            message: "This flag requires authentication",
           },
         },
         401
