@@ -103,8 +103,11 @@ export function buildInternalHeaders(
 
   if (ctx.workspaceId)
     headers.set("X-Workspace-Id", sanitizeInternalHeaderValue(ctx.workspaceId));
-  if (ctx.userId)
-    headers.set("X-XS-User-Id", sanitizeInternalHeaderValue(ctx.userId));
+  // Always send X-XS-User-Id (empty string for anonymous/public requests)
+  headers.set(
+    "X-XS-User-Id",
+    sanitizeInternalHeaderValue(ctx.userId ?? "")
+  );
 
   if (ctx.userEmail)
     headers.set("X-XS-User-Email", sanitizeInternalHeaderValue(ctx.userEmail));
