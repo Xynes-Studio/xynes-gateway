@@ -78,26 +78,32 @@ describe("FeatureFlagService", () => {
         });
       });
 
-      it("should return default value when PostHog returns undefined", async () => {
+      it("should return false when PostHog returns undefined", async () => {
         mockIsFeatureEnabled.mockImplementation(() =>
-          Promise.resolve(undefined)
+          Promise.resolve(undefined),
         );
 
-        const result = await service.getFlag("xynes_auth_oauth_google", testContext);
+        const result = await service.getFlag(
+          "xynes_auth_oauth_google",
+          testContext,
+        );
 
         expect(result).toEqual({
           key: "xynes_auth_oauth_google",
-          enabled: DEFAULT_FLAGS["xynes_auth_oauth_google"], // true
+          enabled: false,
           variant: null,
         });
       });
 
       it("should return default value when PostHog throws error", async () => {
         mockIsFeatureEnabled.mockImplementation(() =>
-          Promise.reject(new Error("Network error"))
+          Promise.reject(new Error("Network error")),
         );
 
-        const result = await service.getFlag("xynes_invite_system", testContext);
+        const result = await service.getFlag(
+          "xynes_invite_system",
+          testContext,
+        );
 
         expect(result).toEqual({
           key: "xynes_invite_system",
@@ -108,7 +114,7 @@ describe("FeatureFlagService", () => {
 
       it("should return false for unknown flags with no default", async () => {
         mockIsFeatureEnabled.mockImplementation(() =>
-          Promise.reject(new Error("Network error"))
+          Promise.reject(new Error("Network error")),
         );
 
         const result = await service.getFlag("unknownFlag", testContext);
@@ -133,7 +139,7 @@ describe("FeatureFlagService", () => {
               workspaceId: "ws-456",
               plan: "pro",
             }),
-          })
+          }),
         );
       });
 
@@ -166,34 +172,50 @@ describe("FeatureFlagService", () => {
     });
 
     describe("getAllFlags", () => {
-      it("should return all flags from PostHog merged with defaults", async () => {
+      it("should return all flags from PostHog merged with false baseline", async () => {
         mockGetAllFlags.mockImplementation(() =>
           Promise.resolve({
             xynes_auth_mfa: true,
             enableNewFeature: true,
-          })
+          }),
         );
 
         const result = await service.getAllFlags(testContext);
 
+        const expectedBaseline = Object.keys(DEFAULT_FLAGS).reduce(
+          (acc, key) => {
+            acc[key] = false;
+            return acc;
+          },
+          {} as Record<string, boolean>,
+        );
+
         expect(result.flags).toEqual({
-          ...DEFAULT_FLAGS,
+          ...expectedBaseline,
           xynes_auth_mfa: true,
           enableNewFeature: true,
         });
       });
 
-      it("should return defaults when PostHog returns empty", async () => {
+      it("should return false baseline when PostHog returns empty", async () => {
         mockGetAllFlags.mockImplementation(() => Promise.resolve({}));
 
         const result = await service.getAllFlags(testContext);
 
-        expect(result.flags).toEqual(DEFAULT_FLAGS);
+        const expectedBaseline = Object.keys(DEFAULT_FLAGS).reduce(
+          (acc, key) => {
+            acc[key] = false;
+            return acc;
+          },
+          {} as Record<string, boolean>,
+        );
+
+        expect(result.flags).toEqual(expectedBaseline);
       });
 
       it("should return defaults when PostHog throws error", async () => {
         mockGetAllFlags.mockImplementation(() =>
-          Promise.reject(new Error("Network error"))
+          Promise.reject(new Error("Network error")),
         );
 
         const result = await service.getAllFlags(testContext);
@@ -221,7 +243,7 @@ describe("FeatureFlagService", () => {
             stringFlag: "variant-a", // non-boolean should be ignored
             numberFlag: 42, // non-boolean should be ignored
             xynes_invite_system: false,
-          })
+          }),
         );
 
         const result = await service.getAllFlags(testContext);
@@ -230,10 +252,10 @@ describe("FeatureFlagService", () => {
         expect(result.flags.xynes_invite_system).toBe(false);
         // Non-boolean flags should not be in the result
         expect(
-          (result.flags as Record<string, unknown>)["stringFlag"]
+          (result.flags as Record<string, unknown>)["stringFlag"],
         ).toBeUndefined();
         expect(
-          (result.flags as Record<string, unknown>)["numberFlag"]
+          (result.flags as Record<string, unknown>)["numberFlag"],
         ).toBeUndefined();
       });
     });
@@ -252,6 +274,23 @@ describe("FeatureFlagService", () => {
 
     beforeEach(() => {
       service = new FeatureFlagService({ apiKey: "" });
+    });
+
+    it("should log debug when disabled and debug enabled", async () => {
+      const consoleSpy = mock(() => undefined);
+      const originalConsoleInfo = console.info;
+      console.info = consoleSpy;
+
+      const debugService = new FeatureFlagService({
+        apiKey: "",
+        debug: true,
+      });
+
+      await debugService.getAllFlags(testContext);
+
+      expect(consoleSpy).toHaveBeenCalled();
+
+      console.info = originalConsoleInfo;
     });
 
     it("should return default for getFlag when disabled", async () => {

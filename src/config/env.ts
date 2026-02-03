@@ -27,5 +27,8 @@ export const config = {
   posthog: {
     apiKey: process.env.POSTHOG_API_KEY || "",
     host: process.env.POSTHOG_HOST || "https://app.posthog.com",
+    debug:
+      process.env.POSTHOG_DEBUG === "true" ||
+      process.env.FEATURE_FLAGS_DEBUG === "true",
   },
 };

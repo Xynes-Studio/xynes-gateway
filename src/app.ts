@@ -129,6 +129,7 @@ export const createApp = async () => {
   const featureFlagService = new FeatureFlagService({
     apiKey: config.posthog.apiKey,
     host: config.posthog.host,
+    debug: config.posthog.debug,
   });
   const flagsRoute = createFlagsRoute(featureFlagService);
 

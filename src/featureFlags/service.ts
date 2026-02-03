@@ -23,6 +23,8 @@ export interface FeatureFlagServiceConfig {
   apiKey: string;
   /** PostHog host URL (default: https://app.posthog.com) */
   host?: string;
+  /** Enable debug logging for flag evaluation */
+  debug?: boolean;
 }
 
 /**
@@ -36,9 +38,11 @@ export interface FeatureFlagServiceConfig {
 export class FeatureFlagService implements IFeatureFlagService {
   private client: PostHog | null = null;
   private readonly isEnabled: boolean;
+  private readonly debug: boolean;
 
   constructor(config: FeatureFlagServiceConfig) {
     this.isEnabled = Boolean(config.apiKey);
+    this.debug = Boolean(config.debug);
 
     if (this.isEnabled) {
       this.client = new PostHog(config.apiKey, {
@@ -49,13 +53,21 @@ export class FeatureFlagService implements IFeatureFlagService {
         enableExceptionAutocapture: false,
       });
     }
+
+    if (this.debug) {
+      console.info("[FeatureFlagService] init", {
+        enabled: this.isEnabled,
+        host: config.host || "https://app.posthog.com",
+        hasApiKey: Boolean(config.apiKey),
+      });
+    }
   }
 
   /**
    * Build person properties for PostHog from context.
    */
   private buildPersonProperties(
-    context: FeatureFlagContext
+    context: FeatureFlagContext,
   ): Record<string, unknown> {
     const properties: Record<string, unknown> = {
       ...context.properties,
@@ -73,10 +85,19 @@ export class FeatureFlagService implements IFeatureFlagService {
    */
   async getFlag(
     key: string,
-    context: FeatureFlagContext
+    context: FeatureFlagContext,
   ): Promise<FeatureFlagResult> {
     // If service is disabled, return default
     if (!this.isEnabled || !this.client) {
+      if (this.debug) {
+        console.info("[FeatureFlagService] getFlag fallback", {
+          key,
+          reason: "posthog-disabled",
+          userId: context.userId,
+          workspaceId: context.workspaceId ?? null,
+          defaultValue: DEFAULT_FLAGS[key] ?? false,
+        });
+      }
       return {
         key,
         enabled: DEFAULT_FLAGS[key] ?? false,
@@ -92,8 +113,18 @@ export class FeatureFlagService implements IFeatureFlagService {
         sendFeatureFlagEvents: false,
       });
 
-      // PostHog returns undefined if flag doesn't exist, use default
-      const enabled = result ?? DEFAULT_FLAGS[key] ?? false;
+      // PostHog returns undefined if flag doesn't exist; treat as false when enabled
+      const enabled = result ?? false;
+
+      if (this.debug) {
+        console.info("[FeatureFlagService] getFlag", {
+          key,
+          userId: context.userId,
+          workspaceId: context.workspaceId ?? null,
+          enabled,
+          source: result === undefined ? "posthog-missing" : "posthog",
+        });
+      }
 
       return {
         key,
@@ -104,8 +135,17 @@ export class FeatureFlagService implements IFeatureFlagService {
       // Log error but don't fail - return default
       console.error(
         `[FeatureFlagService] Error checking flag "${key}":`,
-        error
+        error,
       );
+      if (this.debug) {
+        console.info("[FeatureFlagService] getFlag fallback", {
+          key,
+          reason: "posthog-error",
+          userId: context.userId,
+          workspaceId: context.workspaceId ?? null,
+          defaultValue: DEFAULT_FLAGS[key] ?? false,
+        });
+      }
       return {
         key,
         enabled: DEFAULT_FLAGS[key] ?? false,
@@ -120,6 +160,13 @@ export class FeatureFlagService implements IFeatureFlagService {
   async getAllFlags(context: FeatureFlagContext): Promise<AllFlagsResult> {
     // If service is disabled, return defaults
     if (!this.isEnabled || !this.client) {
+      if (this.debug) {
+        console.info("[FeatureFlagService] getAllFlags fallback", {
+          reason: "posthog-disabled",
+          userId: context.userId,
+          workspaceId: context.workspaceId ?? null,
+        });
+      }
       return { flags: { ...DEFAULT_FLAGS } };
     }
 
@@ -130,7 +177,7 @@ export class FeatureFlagService implements IFeatureFlagService {
         personProperties,
       });
 
-      // Merge PostHog flags with defaults (PostHog overrides)
+      // Merge PostHog flags with a false baseline (PostHog overrides)
       // Filter to only boolean values (feature flags, not variants)
       const booleanFlags: Record<string, boolean> = {};
       for (const [key, value] of Object.entries(posthogFlags)) {
@@ -139,15 +186,35 @@ export class FeatureFlagService implements IFeatureFlagService {
         }
       }
 
+      const baselineFlags: Record<string, boolean> = {};
+      for (const key of Object.keys(DEFAULT_FLAGS)) {
+        baselineFlags[key] = false;
+      }
+
+      if (this.debug) {
+        console.info("[FeatureFlagService] getAllFlags", {
+          userId: context.userId,
+          workspaceId: context.workspaceId ?? null,
+          posthogFlags: booleanFlags,
+        });
+      }
+
       return {
         flags: {
-          ...DEFAULT_FLAGS,
+          ...baselineFlags,
           ...booleanFlags,
         },
       };
     } catch (error) {
       // Log error but don't fail - return defaults
       console.error("[FeatureFlagService] Error getting all flags:", error);
+      if (this.debug) {
+        console.info("[FeatureFlagService] getAllFlags fallback", {
+          reason: "posthog-error",
+          userId: context.userId,
+          workspaceId: context.workspaceId ?? null,
+        });
+      }
       return { flags: { ...DEFAULT_FLAGS } };
     }
   }
