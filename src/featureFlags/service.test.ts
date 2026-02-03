@@ -57,10 +57,10 @@ describe("FeatureFlagService", () => {
       it("should return enabled=true when PostHog returns true", async () => {
         mockIsFeatureEnabled.mockImplementation(() => Promise.resolve(true));
 
-        const result = await service.getFlag("enableMFA", testContext);
+        const result = await service.getFlag("xynes_auth_mfa", testContext);
 
         expect(result).toEqual({
-          key: "enableMFA",
+          key: "xynes_auth_mfa",
           enabled: true,
           variant: null,
         });
@@ -69,10 +69,10 @@ describe("FeatureFlagService", () => {
       it("should return enabled=false when PostHog returns false", async () => {
         mockIsFeatureEnabled.mockImplementation(() => Promise.resolve(false));
 
-        const result = await service.getFlag("enableMFA", testContext);
+        const result = await service.getFlag("xynes_auth_mfa", testContext);
 
         expect(result).toEqual({
-          key: "enableMFA",
+          key: "xynes_auth_mfa",
           enabled: false,
           variant: null,
         });
@@ -83,11 +83,11 @@ describe("FeatureFlagService", () => {
           Promise.resolve(undefined)
         );
 
-        const result = await service.getFlag("enableOAuthGoogle", testContext);
+        const result = await service.getFlag("xynes_auth_oauth_google", testContext);
 
         expect(result).toEqual({
-          key: "enableOAuthGoogle",
-          enabled: DEFAULT_FLAGS["enableOAuthGoogle"], // true
+          key: "xynes_auth_oauth_google",
+          enabled: DEFAULT_FLAGS["xynes_auth_oauth_google"], // true
           variant: null,
         });
       });
@@ -97,11 +97,11 @@ describe("FeatureFlagService", () => {
           Promise.reject(new Error("Network error"))
         );
 
-        const result = await service.getFlag("enableInvites", testContext);
+        const result = await service.getFlag("xynes_invite_system", testContext);
 
         expect(result).toEqual({
-          key: "enableInvites",
-          enabled: DEFAULT_FLAGS["enableInvites"], // true
+          key: "xynes_invite_system",
+          enabled: DEFAULT_FLAGS["xynes_invite_system"], // true
           variant: null,
         });
       });
@@ -123,10 +123,10 @@ describe("FeatureFlagService", () => {
       it("should pass context to PostHog with workspaceId", async () => {
         mockIsFeatureEnabled.mockImplementation(() => Promise.resolve(true));
 
-        await service.getFlag("enableMFA", testContext);
+        await service.getFlag("xynes_auth_mfa", testContext);
 
         expect(mockIsFeatureEnabled).toHaveBeenCalledWith(
-          "enableMFA",
+          "xynes_auth_mfa",
           "user-123",
           expect.objectContaining({
             personProperties: expect.objectContaining({
@@ -143,7 +143,7 @@ describe("FeatureFlagService", () => {
           userId: "user-123",
         };
 
-        await service.getFlag("enableMFA", contextWithoutWorkspace);
+        await service.getFlag("xynes_auth_mfa", contextWithoutWorkspace);
 
         const callArgs = mockIsFeatureEnabled.mock.calls[0];
         const personProps = callArgs[2] as {
@@ -158,7 +158,7 @@ describe("FeatureFlagService", () => {
           userId: "user-123",
         };
 
-        const result = await service.getFlag("enableMFA", minimalContext);
+        const result = await service.getFlag("xynes_auth_mfa", minimalContext);
 
         expect(result.enabled).toBe(true);
         expect(mockIsFeatureEnabled).toHaveBeenCalled();
@@ -169,7 +169,7 @@ describe("FeatureFlagService", () => {
       it("should return all flags from PostHog merged with defaults", async () => {
         mockGetAllFlags.mockImplementation(() =>
           Promise.resolve({
-            enableMFA: true,
+            xynes_auth_mfa: true,
             enableNewFeature: true,
           })
         );
@@ -178,7 +178,7 @@ describe("FeatureFlagService", () => {
 
         expect(result.flags).toEqual({
           ...DEFAULT_FLAGS,
-          enableMFA: true,
+          xynes_auth_mfa: true,
           enableNewFeature: true,
         });
       });
@@ -217,17 +217,17 @@ describe("FeatureFlagService", () => {
       it("should filter out non-boolean values from PostHog response", async () => {
         mockGetAllFlags.mockImplementation(() =>
           Promise.resolve({
-            enableMFA: true,
+            xynes_auth_mfa: true,
             stringFlag: "variant-a", // non-boolean should be ignored
             numberFlag: 42, // non-boolean should be ignored
-            enableInvites: false,
+            xynes_invite_system: false,
           })
         );
 
         const result = await service.getAllFlags(testContext);
 
-        expect(result.flags.enableMFA).toBe(true);
-        expect(result.flags.enableInvites).toBe(false);
+        expect(result.flags.xynes_auth_mfa).toBe(true);
+        expect(result.flags.xynes_invite_system).toBe(false);
         // Non-boolean flags should not be in the result
         expect(
           (result.flags as Record<string, unknown>)["stringFlag"]
@@ -255,11 +255,11 @@ describe("FeatureFlagService", () => {
     });
 
     it("should return default for getFlag when disabled", async () => {
-      const result = await service.getFlag("enableMFA", testContext);
+      const result = await service.getFlag("xynes_auth_mfa", testContext);
 
       expect(result).toEqual({
-        key: "enableMFA",
-        enabled: DEFAULT_FLAGS["enableMFA"],
+        key: "xynes_auth_mfa",
+        enabled: DEFAULT_FLAGS["xynes_auth_mfa"],
         variant: null,
       });
       // PostHog should not be called
@@ -298,29 +298,34 @@ describe("FeatureFlagService", () => {
 
 describe("DEFAULT_FLAGS", () => {
   it("should have conservative defaults for new features", () => {
-    expect(DEFAULT_FLAGS.enableMFA).toBe(false);
-    expect(DEFAULT_FLAGS.maintenanceMode).toBe(false);
+    expect(DEFAULT_FLAGS.xynes_auth_mfa).toBe(false);
+    expect(DEFAULT_FLAGS.xynes_maintenance_mode).toBe(false);
   });
 
   it("should have enabled defaults for core features", () => {
-    expect(DEFAULT_FLAGS.enableOAuthGoogle).toBe(true);
-    expect(DEFAULT_FLAGS.enableOAuthGitHub).toBe(true);
-    expect(DEFAULT_FLAGS.enableInvites).toBe(true);
+    expect(DEFAULT_FLAGS.xynes_auth_oauth_google).toBe(true);
+    expect(DEFAULT_FLAGS.xynes_auth_oauth_github).toBe(true);
+    expect(DEFAULT_FLAGS.xynes_invite_system).toBe(true);
   });
 
   it("should have all expected flag keys", () => {
     const expectedKeys = [
-      "enableMFA",
-      "enableOAuthGoogle",
-      "enableOAuthGitHub",
-      "enableOAuthApple",
-      "enableInvites",
-      "enableMultipleWorkspaces",
-      "enableWorkspaceCreation",
-      "maintenanceMode",
-      "enableRateLimitUI",
-      "enablePasswordReset",
-      "enableProfileEdit",
+      "xynes_auth_email_signup",
+      "xynes_auth_mfa",
+      "xynes_auth_oauth_google",
+      "xynes_auth_oauth_github",
+      "xynes_auth_oauth_apple",
+      "xynes_auth_session_management",
+      "xynes_auth_rate_limit_ui",
+      "xynes_auth_remember_me",
+      "xynes_auth_password_reset",
+      "xynes_auth_profile_edit",
+      "xynes_invite_system",
+      "xynes_invite_revocation",
+      "xynes_workspace_multiple",
+      "xynes_workspace_switching",
+      "xynes_workspace_creation",
+      "xynes_maintenance_mode",
     ];
 
     for (const key of expectedKeys) {

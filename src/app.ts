@@ -39,8 +39,17 @@ export const createApp = async () => {
         return configuredOrigins.includes(origin) ? origin : null;
       },
       allowMethods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-      allowHeaders: ["Content-Type", "Authorization", "X-XS-Workspace-Id"],
-    })
+      allowHeaders: [
+        "Content-Type",
+        "Authorization",
+        // Used by the auth frontend for CSRF protection.
+        "X-CSRF-Token",
+        // Feature flags use a "workspace hint" header.
+        "X-XS-Workspace-Id",
+        // Core gateway routes use X-Workspace-Id for workspace-scoped actions.
+        "X-Workspace-Id",
+      ],
+    }),
   );
 
   // Middleware
@@ -82,28 +91,39 @@ export const createApp = async () => {
       requestId,
     });
 
-    const res = await fetch(config.services.accounts + "/internal/accounts-actions", {
-      method: "POST",
-      headers,
-      body: JSON.stringify({
-        actionKey: "accounts.workspaces.listForUser",
-        payload: {},
-      }),
-    });
+    const res = await fetch(
+      config.services.accounts + "/internal/accounts-actions",
+      {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          actionKey: "accounts.workspaces.listForUser",
+          payload: {},
+        }),
+      },
+    );
 
     if (!res.ok) {
       return c.json({ available: true, checked: false }, 200);
     }
 
-    const body = (await res.json().catch(() => null)) as any;
+    type WorkspaceListResponse = {
+      data?: { workspaces?: Array<{ slug?: string | null }> };
+      workspaces?: Array<{ slug?: string | null }>;
+    };
+
+    const body = (await res
+      .json()
+      .catch(() => null)) as WorkspaceListResponse | null;
     const workspaces = body?.data?.workspaces ?? body?.workspaces ?? [];
     const taken = Array.isArray(workspaces)
-      ? workspaces.some((w) => w && typeof w.slug === "string" && w.slug === slug)
+      ? workspaces.some(
+          (w) => w && typeof w.slug === "string" && w.slug === slug,
+        )
       : false;
 
     return c.json({ available: !taken }, 200);
   });
-
 
   // INFRA-BE-1: Feature Flags Service & Route
   const featureFlagService = new FeatureFlagService({
@@ -118,7 +138,7 @@ export const createApp = async () => {
   // Dependencies
   const authzService = new AuthzService(
     config.services.authz,
-    config.internalServiceToken
+    config.internalServiceToken,
   );
 
   // Initial Routes (Mock for now, will come from DB later)

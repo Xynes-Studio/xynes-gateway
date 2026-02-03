@@ -50,10 +50,10 @@ describe("flags.route", () => {
     describe("authenticated requests", () => {
       it("should return all personalized flags for authenticated user", async () => {
         const mockFlags = {
-          enableMFA: true,
-          enableInvites: true,
-          maintenanceMode: false,
-          enableOAuthGoogle: true,
+          xynes_auth_mfa: true,
+          xynes_invite_system: true,
+          xynes_maintenance_mode: false,
+          xynes_auth_oauth_google: true,
         };
 
         (
@@ -128,11 +128,12 @@ describe("flags.route", () => {
     describe("unauthenticated requests", () => {
       it("should return public flags only without auth token", async () => {
         const mockFlags = {
-          enableMFA: true,
-          enableInvites: true,
-          maintenanceMode: false,
-          enableOAuthGoogle: true,
-          enableOAuthGitHub: false,
+          xynes_auth_mfa: true,
+          xynes_invite_system: true,
+          xynes_maintenance_mode: false,
+          xynes_auth_oauth_google: true,
+          xynes_auth_oauth_github: false,
+          xynes_admin_api_keys: true, // private/non-public flag should be filtered out
         };
 
         (
@@ -153,19 +154,18 @@ describe("flags.route", () => {
         expect(body.authenticated).toBe(false);
 
         // Should only contain public flags
-        expect(body.flags.maintenanceMode).toBe(false);
-        expect(body.flags.enableOAuthGoogle).toBe(true);
-        expect(body.flags.enableOAuthGitHub).toBe(false);
+        expect(body.flags.xynes_maintenance_mode).toBe(false);
+        expect(body.flags.xynes_auth_oauth_google).toBe(true);
+        expect(body.flags.xynes_auth_oauth_github).toBe(false);
 
-        // Should NOT contain private flags
-        expect(body.flags.enableMFA).toBeUndefined();
-        expect(body.flags.enableInvites).toBeUndefined();
+        // Should NOT contain private/non-public flags
+        expect(body.flags.xynes_admin_api_keys).toBeUndefined();
       });
 
       it("should return public flags with invalid token", async () => {
         const mockFlags = {
-          maintenanceMode: true,
-          enableOAuthGoogle: true,
+          xynes_maintenance_mode: true,
+          xynes_auth_oauth_google: true,
         };
 
         (
@@ -186,7 +186,7 @@ describe("flags.route", () => {
         expect(res.status).toBe(200);
         const body = await res.json();
         expect(body.authenticated).toBe(false);
-        expect(body.flags.maintenanceMode).toBe(true);
+        expect(body.flags.xynes_maintenance_mode).toBe(true);
       });
 
       it("should handle service errors gracefully for public flags", async () => {
@@ -213,7 +213,7 @@ describe("flags.route", () => {
   describe("GET /flags/:key", () => {
     describe("public flags", () => {
       it("should return public flag without auth", async () => {
-        const publicFlag = PUBLIC_FLAG_KEYS[0]; // e.g., "enableOAuthGoogle"
+        const publicFlag = PUBLIC_FLAG_KEYS[0]; // e.g., "xynes_auth_oauth_google"
 
         (
           mockFeatureFlagService.getFlag as ReturnType<typeof vi.fn>
@@ -272,13 +272,14 @@ describe("flags.route", () => {
 
     describe("private flags", () => {
       it("should return 401 for private flag without auth", async () => {
+        const privateFlag = "xynes_admin_api_keys";
         const app = new Hono();
         const flagsRoute = createFlagsRoute(mockFeatureFlagService, {
           authVerifier: createMockAuthVerifier(null),
         });
         app.route("/flags", flagsRoute);
 
-        const res = await app.request("/flags/enableMFA");
+        const res = await app.request(`/flags/${privateFlag}`);
 
         expect(res.status).toBe(401);
         const body = await res.json();
@@ -287,10 +288,11 @@ describe("flags.route", () => {
       });
 
       it("should return private flag for authenticated user", async () => {
+        const privateFlag = "xynes_admin_api_keys";
         (
           mockFeatureFlagService.getFlag as ReturnType<typeof vi.fn>
         ).mockResolvedValue({
-          key: "enableMFA",
+          key: privateFlag,
           enabled: true,
           variant: null,
         });
@@ -301,17 +303,18 @@ describe("flags.route", () => {
         });
         app.route("/flags", flagsRoute);
 
-        const res = await app.request("/flags/enableMFA", {
+        const res = await app.request(`/flags/${privateFlag}`, {
           headers: { Authorization: "Bearer valid-token" },
         });
 
         expect(res.status).toBe(200);
         const body = await res.json();
-        expect(body.key).toBe("enableMFA");
+        expect(body.key).toBe(privateFlag);
         expect(body.enabled).toBe(true);
       });
 
       it("should return 401 for private flag with invalid token", async () => {
+        const privateFlag = "xynes_admin_api_keys";
         // Use header-inspecting verifier with no valid tokens
         const app = new Hono();
         const flagsRoute = createFlagsRoute(mockFeatureFlagService, {
@@ -319,7 +322,7 @@ describe("flags.route", () => {
         });
         app.route("/flags", flagsRoute);
 
-        const res = await app.request("/flags/enableMFA", {
+        const res = await app.request(`/flags/${privateFlag}`, {
           headers: { Authorization: "Bearer invalid-token" },
         });
 
@@ -332,7 +335,7 @@ describe("flags.route", () => {
         (
           mockFeatureFlagService.getFlag as ReturnType<typeof vi.fn>
         ).mockResolvedValue({
-          key: "enableMFA",
+          key: "xynes_auth_mfa",
           enabled: false,
           variant: null,
         });
@@ -343,7 +346,7 @@ describe("flags.route", () => {
         });
         app.route("/flags", flagsRoute);
 
-        const res = await app.request("/flags/enableMFA", {
+        const res = await app.request("/flags/xynes_auth_mfa", {
           headers: { Authorization: "Bearer valid-token" },
         });
 
@@ -388,14 +391,14 @@ describe("flags.route", () => {
         });
         app.route("/flags", flagsRoute);
 
-        const res = await app.request("/flags/enableMFA", {
+        const res = await app.request("/flags/xynes_auth_mfa", {
           headers: { Authorization: "Bearer valid-token" },
         });
 
         // Should return default, not error
         expect(res.status).toBe(200);
         const body = await res.json();
-        expect(body.key).toBe("enableMFA");
+        expect(body.key).toBe("xynes_auth_mfa");
         expect(typeof body.enabled).toBe("boolean");
       });
     });
@@ -406,7 +409,7 @@ describe("flags.route", () => {
       (
         mockFeatureFlagService.getFlag as ReturnType<typeof vi.fn>
       ).mockResolvedValue({
-        key: "enableMFA",
+        key: "xynes_auth_mfa",
         enabled: true,
         variant: null,
       });
@@ -417,12 +420,12 @@ describe("flags.route", () => {
       });
       app.route("/flags", flagsRoute);
 
-      const res = await app.request("/flags/enableMFA", {
+      const res = await app.request("/flags/xynes_auth_mfa", {
         headers: { Authorization: "Bearer valid-token" },
       });
 
       expect(res.status).toBe(200);
-      expect(mockFeatureFlagService.getFlag).toHaveBeenCalledWith("enableMFA", {
+      expect(mockFeatureFlagService.getFlag).toHaveBeenCalledWith("xynes_auth_mfa", {
         userId: "user-123",
         workspaceId: undefined,
       });
@@ -432,7 +435,7 @@ describe("flags.route", () => {
       (
         mockFeatureFlagService.getFlag as ReturnType<typeof vi.fn>
       ).mockResolvedValue({
-        key: "enableMFA",
+        key: "xynes_auth_mfa",
         enabled: true,
         variant: null,
       });
@@ -443,14 +446,14 @@ describe("flags.route", () => {
       });
       app.route("/flags", flagsRoute);
 
-      await app.request("/flags/enableMFA", {
+      await app.request("/flags/xynes_auth_mfa", {
         headers: {
           Authorization: "Bearer valid-token",
           "X-XS-Workspace-Id": "ws-789",
         },
       });
 
-      expect(mockFeatureFlagService.getFlag).toHaveBeenCalledWith("enableMFA", {
+      expect(mockFeatureFlagService.getFlag).toHaveBeenCalledWith("xynes_auth_mfa", {
         userId: "user-123",
         workspaceId: "ws-789",
       });
@@ -460,7 +463,7 @@ describe("flags.route", () => {
       (
         mockFeatureFlagService.getFlag as ReturnType<typeof vi.fn>
       ).mockResolvedValue({
-        key: "enableMFA",
+        key: "xynes_auth_mfa",
         enabled: true,
         variant: null,
       });
@@ -471,11 +474,11 @@ describe("flags.route", () => {
       });
       app.route("/flags", flagsRoute);
 
-      await app.request("/flags/enableMFA?workspaceId=ws-query", {
+      await app.request("/flags/xynes_auth_mfa?workspaceId=ws-query", {
         headers: { Authorization: "Bearer valid-token" },
       });
 
-      expect(mockFeatureFlagService.getFlag).toHaveBeenCalledWith("enableMFA", {
+      expect(mockFeatureFlagService.getFlag).toHaveBeenCalledWith("xynes_auth_mfa", {
         userId: "user-123",
         workspaceId: "ws-query",
       });
@@ -484,17 +487,15 @@ describe("flags.route", () => {
 
   describe("PUBLIC_FLAG_KEYS configuration", () => {
     it("should have expected public flags defined", () => {
-      expect(PUBLIC_FLAG_KEYS).toContain("enableOAuthGoogle");
-      expect(PUBLIC_FLAG_KEYS).toContain("enableOAuthGitHub");
-      expect(PUBLIC_FLAG_KEYS).toContain("enableOAuthApple");
-      expect(PUBLIC_FLAG_KEYS).toContain("maintenanceMode");
-      expect(PUBLIC_FLAG_KEYS).toContain("enablePasswordReset");
+      expect(PUBLIC_FLAG_KEYS).toContain("xynes_auth_oauth_google");
+      expect(PUBLIC_FLAG_KEYS).toContain("xynes_auth_oauth_github");
+      expect(PUBLIC_FLAG_KEYS).toContain("xynes_auth_oauth_apple");
+      expect(PUBLIC_FLAG_KEYS).toContain("xynes_maintenance_mode");
+      expect(PUBLIC_FLAG_KEYS).toContain("xynes_auth_password_reset");
     });
 
     it("should not include sensitive flags as public", () => {
-      expect(PUBLIC_FLAG_KEYS).not.toContain("enableMFA");
-      expect(PUBLIC_FLAG_KEYS).not.toContain("enableInvites");
-      expect(PUBLIC_FLAG_KEYS).not.toContain("enableApiKeys");
+      expect(PUBLIC_FLAG_KEYS).not.toContain("xynes_admin_api_keys");
     });
   });
 });

@@ -78,7 +78,7 @@ describe("internalHeaders", () => {
       expect(headers.get("X-Internal-Debug")).toBeNull();
     });
 
-    it("sets X-XS-User-Id to empty string when anonymous", () => {
+    it("omits X-XS-User-Id when anonymous", () => {
       const clientHeaders = new Headers({
         Accept: "application/json",
         "X-XS-User-Id": "attacker",
@@ -91,7 +91,7 @@ describe("internalHeaders", () => {
         requestId: "req_1",
       });
 
-      expect(headers.get("X-XS-User-Id")).toBe("");
+      expect(headers.get("X-XS-User-Id")).toBeNull();
     });
 
     it("sanitizes injected control characters in internal header values", () => {

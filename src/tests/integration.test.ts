@@ -87,6 +87,31 @@ describe("Gateway Integration", () => {
     expect(body.error).toBe("service not ready");
   });
 
+  it("OPTIONS /me allows Authorization + X-CSRF-Token headers (CORS preflight)", async () => {
+    const app = await createApp();
+    const res = await app.request("/me", {
+      method: "OPTIONS",
+      headers: {
+        Origin: "http://localhost:3100",
+        "Access-Control-Request-Method": "GET",
+        "Access-Control-Request-Headers": "authorization,x-csrf-token",
+      },
+    });
+
+    expect([200, 204]).toContain(res.status);
+    expect(res.headers.get("access-control-allow-origin")).toBe(
+      "http://localhost:3100"
+    );
+
+    const allowHeaders = (res.headers.get("access-control-allow-headers") || "")
+      .toLowerCase()
+      .split(",")
+      .map((h) => h.trim());
+
+    expect(allowHeaders).toContain("authorization");
+    expect(allowHeaders).toContain("x-csrf-token");
+  });
+
   it("should proxy POST /workspaces/:id/documents to doc-service", async () => {
     const app = await createApp();
     const token = signHs256ForTest(

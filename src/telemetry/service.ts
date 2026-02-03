@@ -66,7 +66,9 @@ export class GatewayTelemetryService implements IGatewayTelemetryService {
   private generateInternalToken(requestId: string): string | null {
     if (config.internalJwtSigningKey) {
       return signInternalJwt(config.internalJwtSigningKey, {
-        serviceKey: "gateway",
+        // Audience must match what telemetry-service expects, otherwise it will
+        // reject with `audience_mismatch`.
+        serviceKey: "telemetry-service",
         requestId,
       });
     }
