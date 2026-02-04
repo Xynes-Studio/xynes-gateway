@@ -173,6 +173,15 @@ export const createApp = async () => {
       workspaceScoped: false,
       actionKey: "accounts.workspaces.create",
     },
+    {
+      id: "workspaces-members-1",
+      pathPattern: "/workspaces/:workspaceId/members",
+      method: "GET",
+      serviceKey: "accounts-service",
+      targetPath: "/workspaces/:workspaceId/members",
+      workspaceScoped: true,
+      actionKey: "accounts.workspace_members.listForWorkspace",
+    },
     // Workspace Invites (INVITES-CORE-1)
     {
       id: "invites-1",
