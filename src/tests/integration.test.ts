@@ -50,8 +50,8 @@ describe("Gateway Integration", () => {
     pingDbMock.mockReset();
     global.fetch = vi.fn(() =>
       Promise.resolve(
-        new Response(JSON.stringify({ status: "ok" }), { status: 200 })
-      )
+        new Response(JSON.stringify({ status: "ok" }), { status: 200 }),
+      ),
     ) as unknown as typeof fetch;
   });
 
@@ -100,7 +100,7 @@ describe("Gateway Integration", () => {
 
     expect([200, 204]).toContain(res.status);
     expect(res.headers.get("access-control-allow-origin")).toBe(
-      "http://localhost:3100"
+      "http://localhost:3100",
     );
 
     const allowHeaders = (res.headers.get("access-control-allow-headers") || "")
@@ -116,7 +116,7 @@ describe("Gateway Integration", () => {
     const app = await createApp();
     const token = signHs256ForTest(
       { sub: "user-1", exp: 2_000_000_000 },
-      "test-jwt-secret"
+      "test-jwt-secret",
     );
 
     // Mock fetch to handle both Authz and Downstream
@@ -126,7 +126,7 @@ describe("Gateway Integration", () => {
       if (urlStr.includes("/authz/check")) {
         const headers = new Headers(init?.headers);
         expect(headers.get("X-Internal-Service-Token")).toBe(
-          "test-internal-token"
+          "test-internal-token",
         );
         const body = JSON.parse(String(init?.body || "{}")) as {
           userId?: string;
@@ -138,14 +138,14 @@ describe("Gateway Integration", () => {
         return Promise.resolve(
           new Response(JSON.stringify({ ok: true, data: { allowed: true } }), {
             status: 200,
-          })
+          }),
         );
       }
       if (urlStr.includes("/internal/doc-actions")) {
         // Updated to match new DynamicRouter logic
         const headers = new Headers(init?.headers);
         expect(headers.get("X-Internal-Service-Token")).toBe(
-          "test-internal-token"
+          "test-internal-token",
         );
         expect(headers.get("X-Workspace-Id")).toBe("workspace-1");
         expect(headers.get("X-XS-User-Id")).toBe("user-1");
@@ -153,12 +153,12 @@ describe("Gateway Integration", () => {
           new Response(JSON.stringify({ id: "doc-1", title: "Test Doc" }), {
             status: 200,
             headers: { "Content-Type": "application/json" },
-          })
+          }),
         );
       }
       if (urlStr.includes("/internal/telemetry-actions")) {
         return Promise.resolve(
-          new Response(JSON.stringify({ id: "evt-1" }), { status: 201 })
+          new Response(JSON.stringify({ id: "evt-1" }), { status: 201 }),
         );
       }
       return Promise.reject(new Error(`Unknown URL: ${urlStr}`));
@@ -178,7 +178,7 @@ describe("Gateway Integration", () => {
           "X-Workspace-Id": "attacker-workspace",
           "X-Internal-Service-Token": "attacker-token",
         },
-      }
+      },
     );
 
     const res = await app.request(req);
@@ -194,7 +194,7 @@ describe("Gateway Integration", () => {
         meta: expect.objectContaining({
           requestId: expect.stringMatching(/^req_/),
         }),
-      })
+      }),
     );
   });
 
@@ -208,27 +208,27 @@ describe("Gateway Integration", () => {
         avatar_url: "https://example.com/u1.png",
         exp: 2_000_000_000,
       },
-      "test-jwt-secret"
+      "test-jwt-secret",
     );
 
     global.fetch = vi.fn((url: string | URL | Request, init?: RequestInit) => {
       const urlStr = url.toString();
       if (urlStr.includes("/authz/check")) {
         throw new Error(
-          "authz should not be called for workspaceScoped=false routes"
+          "authz should not be called for workspaceScoped=false routes",
         );
       }
       if (urlStr.includes("/internal/accounts-actions")) {
         const headers = new Headers(init?.headers);
         expect(headers.get("X-Internal-Service-Token")).toBe(
-          "test-internal-token"
+          "test-internal-token",
         );
         expect(headers.get("X-Workspace-Id")).toBeNull();
         expect(headers.get("X-XS-User-Id")).toBe("user-1");
         expect(headers.get("X-XS-User-Email")).toBe("user-1@example.com");
         expect(headers.get("X-XS-User-Name")).toBe("User One");
         expect(headers.get("X-XS-User-Avatar-Url")).toBe(
-          "https://example.com/u1.png"
+          "https://example.com/u1.png",
         );
 
         const body = JSON.parse(String(init?.body || "{}")) as {
@@ -249,13 +249,13 @@ describe("Gateway Integration", () => {
               },
               workspaces: [],
             }),
-            { status: 200 }
-          )
+            { status: 200 },
+          ),
         );
       }
       if (urlStr.includes("/internal/telemetry-actions")) {
         return Promise.resolve(
-          new Response(JSON.stringify({ id: "evt-1" }), { status: 201 })
+          new Response(JSON.stringify({ id: "evt-1" }), { status: 201 }),
         );
       }
       return Promise.reject(new Error(`Unknown URL: ${urlStr}`));
@@ -287,7 +287,7 @@ describe("Gateway Integration", () => {
     const app = await createApp();
     const token = signHs256ForTest(
       { sub: "user-1", exp: 2_000_000_000 },
-      "test-jwt-secret"
+      "test-jwt-secret",
     );
 
     global.fetch = vi.fn((url: string | URL | Request, init?: RequestInit) => {
@@ -295,7 +295,7 @@ describe("Gateway Integration", () => {
       if (urlStr.includes("/authz/check")) {
         const headers = new Headers(init?.headers);
         expect(headers.get("X-Internal-Service-Token")).toBe(
-          "test-internal-token"
+          "test-internal-token",
         );
         const body = JSON.parse(String(init?.body || "{}")) as {
           userId?: string;
@@ -308,13 +308,13 @@ describe("Gateway Integration", () => {
         return Promise.resolve(
           new Response(JSON.stringify({ ok: true, data: { allowed: true } }), {
             status: 200,
-          })
+          }),
         );
       }
       if (urlStr.includes("/internal/accounts-actions")) {
         const headers = new Headers(init?.headers);
         expect(headers.get("X-Internal-Service-Token")).toBe(
-          "test-internal-token"
+          "test-internal-token",
         );
         expect(headers.get("X-Workspace-Id")).toBeNull();
         expect(headers.get("X-XS-User-Id")).toBe("user-1");
@@ -327,12 +327,12 @@ describe("Gateway Integration", () => {
         expect(body.payload).toEqual({});
 
         return Promise.resolve(
-          new Response(JSON.stringify({ workspaces: [] }), { status: 200 })
+          new Response(JSON.stringify({ workspaces: [] }), { status: 200 }),
         );
       }
       if (urlStr.includes("/internal/telemetry-actions")) {
         return Promise.resolve(
-          new Response(JSON.stringify({ id: "evt-1" }), { status: 201 })
+          new Response(JSON.stringify({ id: "evt-1" }), { status: 201 }),
         );
       }
       return Promise.reject(new Error(`Unknown URL: ${urlStr}`));
@@ -354,11 +354,86 @@ describe("Gateway Integration", () => {
     expect(body.data).toEqual({ workspaces: [] });
   });
 
+  it("should proxy GET /workspaces/:id/members to accounts-service (auth required, authz called with workspaceId)", async () => {
+    const app = await createApp();
+    const token = signHs256ForTest(
+      { sub: "user-1", exp: 2_000_000_000 },
+      "test-jwt-secret",
+    );
+
+    global.fetch = vi.fn((url: string | URL | Request, init?: RequestInit) => {
+      const urlStr = url.toString();
+      if (urlStr.includes("/authz/check")) {
+        const headers = new Headers(init?.headers);
+        expect(headers.get("X-Internal-Service-Token")).toBe(
+          "test-internal-token",
+        );
+        const body = JSON.parse(String(init?.body || "{}")) as {
+          userId?: string;
+          workspaceId?: string | null;
+          actionKey?: string;
+        };
+        expect(body.userId).toBe("user-1");
+        expect(body.workspaceId).toBe("workspace-1");
+        expect(body.actionKey).toBe(
+          "accounts.workspace_members.listForWorkspace",
+        );
+        return Promise.resolve(
+          new Response(JSON.stringify({ ok: true, data: { allowed: true } }), {
+            status: 200,
+          }),
+        );
+      }
+      if (urlStr.includes("/internal/accounts-actions")) {
+        const headers = new Headers(init?.headers);
+        expect(headers.get("X-Internal-Service-Token")).toBe(
+          "test-internal-token",
+        );
+        expect(headers.get("X-Workspace-Id")).toBe("workspace-1");
+        expect(headers.get("X-XS-User-Id")).toBe("user-1");
+
+        const body = JSON.parse(String(init?.body || "{}")) as {
+          actionKey?: string;
+          payload?: Record<string, unknown>;
+        };
+        expect(body.actionKey).toBe(
+          "accounts.workspace_members.listForWorkspace",
+        );
+        expect(body.payload).toEqual({});
+
+        return Promise.resolve(
+          new Response(JSON.stringify({ members: [] }), { status: 200 }),
+        );
+      }
+      if (urlStr.includes("/internal/telemetry-actions")) {
+        return Promise.resolve(
+          new Response(JSON.stringify({ id: "evt-1" }), { status: 201 }),
+        );
+      }
+      return Promise.reject(new Error(`Unknown URL: ${urlStr}`));
+    }) as unknown as typeof fetch;
+
+    const res = await app.request("/workspaces/workspace-1/members", {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "X-XS-User-Id": "attacker",
+        "X-Workspace-Id": "attacker-workspace",
+        "X-Internal-Service-Token": "attacker-token",
+      },
+    });
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body).toEqual(expect.objectContaining({ ok: true }));
+    expect(body.data).toEqual({ members: [] });
+  });
+
   it("should proxy POST /workspaces to accounts-service (auth required, authz called with workspaceId=null)", async () => {
     const app = await createApp();
     const token = signHs256ForTest(
       { sub: "user-1", exp: 2_000_000_000 },
-      "test-jwt-secret"
+      "test-jwt-secret",
     );
 
     global.fetch = vi.fn((url: string | URL | Request, init?: RequestInit) => {
@@ -375,13 +450,13 @@ describe("Gateway Integration", () => {
         return Promise.resolve(
           new Response(JSON.stringify({ ok: true, data: { allowed: true } }), {
             status: 200,
-          })
+          }),
         );
       }
       if (urlStr.includes("/internal/accounts-actions")) {
         const headers = new Headers(init?.headers);
         expect(headers.get("X-Internal-Service-Token")).toBe(
-          "test-internal-token"
+          "test-internal-token",
         );
         expect(headers.get("X-Workspace-Id")).toBeNull();
 
@@ -401,13 +476,13 @@ describe("Gateway Integration", () => {
               planType: "free",
               createdBy: "user-1",
             }),
-            { status: 201 }
-          )
+            { status: 201 },
+          ),
         );
       }
       if (urlStr.includes("/internal/telemetry-actions")) {
         return Promise.resolve(
-          new Response(JSON.stringify({ id: "evt-1" }), { status: 201 })
+          new Response(JSON.stringify({ id: "evt-1" }), { status: 201 }),
         );
       }
       return Promise.reject(new Error(`Unknown URL: ${urlStr}`));
@@ -428,7 +503,7 @@ describe("Gateway Integration", () => {
     const body = await res.json();
     expect(body).toEqual(expect.objectContaining({ ok: true }));
     expect(body.data).toEqual(
-      expect.objectContaining({ id: "ws-1", name: "Acme", slug: "acme" })
+      expect.objectContaining({ id: "ws-1", name: "Acme", slug: "acme" }),
     );
   });
 
@@ -443,7 +518,7 @@ describe("Gateway Integration", () => {
       if (urlStr.includes("/internal/cms-actions")) {
         const headers = new Headers(init?.headers);
         expect(headers.get("X-Internal-Service-Token")).toBe(
-          "test-internal-token"
+          "test-internal-token",
         );
         expect(headers.get("X-Workspace-Id")).toBe("workspace-1");
         expect(headers.get("X-XS-User-Id")).toBeNull();
@@ -454,16 +529,16 @@ describe("Gateway Integration", () => {
         };
         expect(body.actionKey).toBe("cms.content.listPublished");
         expect(body.payload).toEqual(
-          expect.objectContaining({ routeSegment: "blog" })
+          expect.objectContaining({ routeSegment: "blog" }),
         );
 
         return Promise.resolve(
-          new Response(JSON.stringify({ entries: [] }), { status: 200 })
+          new Response(JSON.stringify({ entries: [] }), { status: 200 }),
         );
       }
       if (urlStr.includes("/internal/telemetry-actions")) {
         return Promise.resolve(
-          new Response(JSON.stringify({ id: "evt-1" }), { status: 201 })
+          new Response(JSON.stringify({ id: "evt-1" }), { status: 201 }),
         );
       }
       return Promise.reject(new Error(`Unknown URL: ${urlStr}`));
@@ -494,7 +569,7 @@ describe("Gateway Integration", () => {
       if (urlStr.includes("/internal/cms-actions")) {
         const headers = new Headers(init?.headers);
         expect(headers.get("X-Internal-Service-Token")).toBe(
-          "test-internal-token"
+          "test-internal-token",
         );
         expect(headers.get("X-Workspace-Id")).toBe("workspace-1");
 
@@ -506,12 +581,12 @@ describe("Gateway Integration", () => {
         expect(body.payload).toEqual({});
 
         return Promise.resolve(
-          new Response(JSON.stringify({ entries: [] }), { status: 200 })
+          new Response(JSON.stringify({ entries: [] }), { status: 200 }),
         );
       }
       if (urlStr.includes("/internal/telemetry-actions")) {
         return Promise.resolve(
-          new Response(JSON.stringify({ id: "evt-1" }), { status: 201 })
+          new Response(JSON.stringify({ id: "evt-1" }), { status: 201 }),
         );
       }
       return Promise.reject(new Error(`Unknown URL: ${urlStr}`));
@@ -534,7 +609,7 @@ describe("Gateway Integration", () => {
       if (urlStr.includes("/internal/cms-actions")) {
         const headers = new Headers(init?.headers);
         expect(headers.get("X-Internal-Service-Token")).toBe(
-          "test-internal-token"
+          "test-internal-token",
         );
         expect(headers.get("X-Workspace-Id")).toBe("workspace-1");
 
@@ -544,18 +619,18 @@ describe("Gateway Integration", () => {
         };
         expect(body.actionKey).toBe("cms.blog_entry.getPublishedBySlug");
         expect(body.payload).toEqual(
-          expect.objectContaining({ slug: "hello-world" })
+          expect.objectContaining({ slug: "hello-world" }),
         );
 
         return Promise.resolve(
           new Response(JSON.stringify({ entry: { slug: "hello-world" } }), {
             status: 200,
-          })
+          }),
         );
       }
       if (urlStr.includes("/internal/telemetry-actions")) {
         return Promise.resolve(
-          new Response(JSON.stringify({ id: "evt-1" }), { status: 201 })
+          new Response(JSON.stringify({ id: "evt-1" }), { status: 201 }),
         );
       }
       return Promise.reject(new Error(`Unknown URL: ${urlStr}`));
@@ -578,7 +653,7 @@ describe("Gateway Integration", () => {
       if (urlStr.includes("/internal/cms-actions")) {
         const headers = new Headers(init?.headers);
         expect(headers.get("X-Internal-Service-Token")).toBe(
-          "test-internal-token"
+          "test-internal-token",
         );
         expect(headers.get("X-Workspace-Id")).toBe("workspace-1");
 
@@ -591,18 +666,18 @@ describe("Gateway Integration", () => {
           expect.objectContaining({
             routeSegment: "blog",
             slug: "hello-world",
-          })
+          }),
         );
 
         return Promise.resolve(
           new Response(JSON.stringify({ entry: { slug: "hello-world" } }), {
             status: 200,
-          })
+          }),
         );
       }
       if (urlStr.includes("/internal/telemetry-actions")) {
         return Promise.resolve(
-          new Response(JSON.stringify({ id: "evt-1" }), { status: 201 })
+          new Response(JSON.stringify({ id: "evt-1" }), { status: 201 }),
         );
       }
       return Promise.reject(new Error(`Unknown URL: ${urlStr}`));
@@ -610,7 +685,7 @@ describe("Gateway Integration", () => {
 
     const res = await app.request(
       "/workspaces/workspace-1/content/blog/hello-world",
-      { method: "GET" }
+      { method: "GET" },
     );
     expect(res.status).toBe(200);
   });
@@ -630,7 +705,7 @@ describe("Gateway Integration", () => {
         meta: expect.objectContaining({
           requestId: expect.stringMatching(/^req_/),
         }),
-      })
+      }),
     );
   });
 
@@ -678,7 +753,7 @@ describe("Gateway Integration", () => {
           if (urlStr.includes("/internal/cms-actions")) {
             const headers = new Headers(init?.headers);
             expect(headers.get("X-Internal-Service-Token")).toBe(
-              "test-internal-token"
+              "test-internal-token",
             );
             expect(headers.get("X-Workspace-Id")).toBe("workspace-123");
 
@@ -697,17 +772,17 @@ describe("Gateway Integration", () => {
                     { id: "e2", slug: "post-2", title: "Post 2" },
                   ],
                 }),
-                { status: 200 }
-              )
+                { status: 200 },
+              ),
             );
           }
           if (urlStr.includes("/internal/telemetry-actions")) {
             return Promise.resolve(
-              new Response(JSON.stringify({ id: "evt-1" }), { status: 201 })
+              new Response(JSON.stringify({ id: "evt-1" }), { status: 201 }),
             );
           }
           return Promise.reject(new Error(`Unknown URL: ${urlStr}`));
-        }
+        },
       ) as unknown as typeof fetch;
 
       const res = await app.request("/workspaces/workspace-123/content/blog", {
@@ -746,22 +821,22 @@ describe("Gateway Integration", () => {
                 JSON.stringify({
                   entry: { id: "e1", slug: "my-post", title: "My Post" },
                 }),
-                { status: 200 }
-              )
+                { status: 200 },
+              ),
             );
           }
           if (urlStr.includes("/internal/telemetry-actions")) {
             return Promise.resolve(
-              new Response(JSON.stringify({ id: "evt-1" }), { status: 201 })
+              new Response(JSON.stringify({ id: "evt-1" }), { status: 201 }),
             );
           }
           return Promise.reject(new Error(`Unknown URL: ${urlStr}`));
-        }
+        },
       ) as unknown as typeof fetch;
 
       const res = await app.request(
         "/workspaces/workspace-123/content/blog/my-post",
-        { method: "GET" }
+        { method: "GET" },
       );
 
       expect(res.status).toBe(200);
@@ -794,16 +869,16 @@ describe("Gateway Integration", () => {
             expect(body.payload?.routeSegment).toBe("news");
 
             return Promise.resolve(
-              new Response(JSON.stringify({ entries: [] }), { status: 200 })
+              new Response(JSON.stringify({ entries: [] }), { status: 200 }),
             );
           }
           if (urlStr.includes("/internal/telemetry-actions")) {
             return Promise.resolve(
-              new Response(JSON.stringify({ id: "evt-1" }), { status: 201 })
+              new Response(JSON.stringify({ id: "evt-1" }), { status: 201 }),
             );
           }
           return Promise.reject(new Error(`Unknown URL: ${urlStr}`));
-        }
+        },
       ) as unknown as typeof fetch;
 
       // Works for /news without any gateway changes
@@ -825,16 +900,16 @@ describe("Gateway Integration", () => {
             capturedWorkspaceId = headers.get("X-Workspace-Id");
 
             return Promise.resolve(
-              new Response(JSON.stringify({ entries: [] }), { status: 200 })
+              new Response(JSON.stringify({ entries: [] }), { status: 200 }),
             );
           }
           if (urlStr.includes("/internal/telemetry-actions")) {
             return Promise.resolve(
-              new Response(JSON.stringify({ id: "evt-1" }), { status: 201 })
+              new Response(JSON.stringify({ id: "evt-1" }), { status: 201 }),
             );
           }
           return Promise.reject(new Error(`Unknown URL: ${urlStr}`));
-        }
+        },
       ) as unknown as typeof fetch;
 
       await app.request("/workspaces/my-workspace-id/content/events", {
@@ -856,16 +931,16 @@ describe("Gateway Integration", () => {
             capturedUserId = headers.get("X-XS-User-Id");
 
             return Promise.resolve(
-              new Response(JSON.stringify({ entries: [] }), { status: 200 })
+              new Response(JSON.stringify({ entries: [] }), { status: 200 }),
             );
           }
           if (urlStr.includes("/internal/telemetry-actions")) {
             return Promise.resolve(
-              new Response(JSON.stringify({ id: "evt-1" }), { status: 201 })
+              new Response(JSON.stringify({ id: "evt-1" }), { status: 201 }),
             );
           }
           return Promise.reject(new Error(`Unknown URL: ${urlStr}`));
-        }
+        },
       ) as unknown as typeof fetch;
 
       // Anonymous request (no Authorization header)
@@ -883,7 +958,7 @@ describe("Gateway Integration", () => {
       const app = await createApp();
       const token = signHs256ForTest(
         { sub: "user-1", exp: 2_000_000_000 },
-        "test-jwt-secret"
+        "test-jwt-secret",
       );
 
       // Mock authz service to allow the request
@@ -895,8 +970,8 @@ describe("Gateway Integration", () => {
               JSON.stringify({ ok: true, data: { allowed: true } }),
               {
                 status: 200,
-              }
-            )
+              },
+            ),
           );
         }
         return Promise.reject(new Error(`Unexpected URL: ${urlStr}`));
@@ -918,7 +993,7 @@ describe("Gateway Integration", () => {
             "Content-Length": String(largeBody.length),
             Authorization: `Bearer ${token}`,
           },
-        }
+        },
       );
 
       const res = await app.request(req);
@@ -936,7 +1011,7 @@ describe("Gateway Integration", () => {
       const app = await createApp();
       const token = signHs256ForTest(
         { sub: "user-1", exp: 2_000_000_000 },
-        "test-jwt-secret"
+        "test-jwt-secret",
       );
 
       global.fetch = vi.fn((url: string | URL | Request) => {
@@ -947,18 +1022,18 @@ describe("Gateway Integration", () => {
               JSON.stringify({ ok: true, data: { allowed: true } }),
               {
                 status: 200,
-              }
-            )
+              },
+            ),
           );
         }
         if (urlStr.includes("/internal/cms-actions")) {
           return Promise.resolve(
-            new Response(JSON.stringify({ id: "comment-1" }), { status: 201 })
+            new Response(JSON.stringify({ id: "comment-1" }), { status: 201 }),
           );
         }
         if (urlStr.includes("/internal/telemetry-actions")) {
           return Promise.resolve(
-            new Response(JSON.stringify({ id: "evt-1" }), { status: 201 })
+            new Response(JSON.stringify({ id: "evt-1" }), { status: 201 }),
           );
         }
         return Promise.reject(new Error(`Unexpected URL: ${urlStr}`));
@@ -979,7 +1054,7 @@ describe("Gateway Integration", () => {
             "Content-Length": String(smallBody.length),
             Authorization: `Bearer ${token}`,
           },
-        }
+        },
       );
 
       const res = await app.request(req);
@@ -991,7 +1066,7 @@ describe("Gateway Integration", () => {
       const app = await createApp();
       const token = signHs256ForTest(
         { sub: "user-1", exp: 2_000_000_000 },
-        "test-jwt-secret"
+        "test-jwt-secret",
       );
 
       global.fetch = vi.fn((url: string | URL | Request) => {
@@ -1002,8 +1077,8 @@ describe("Gateway Integration", () => {
               JSON.stringify({ ok: true, data: { allowed: true } }),
               {
                 status: 200,
-              }
-            )
+              },
+            ),
           );
         }
         return Promise.reject(new Error(`Unexpected URL: ${urlStr}`));
@@ -1022,7 +1097,7 @@ describe("Gateway Integration", () => {
             "Content-Length": String(invalidJson.length),
             Authorization: `Bearer ${token}`,
           },
-        }
+        },
       );
 
       const res = await app.request(req);
@@ -1042,7 +1117,7 @@ describe("Gateway Integration", () => {
       const app = await createApp();
       const token = signHs256ForTest(
         { sub: "user-1", exp: 2_000_000_000 },
-        "test-jwt-secret"
+        "test-jwt-secret",
       );
 
       global.fetch = vi.fn((url: string | URL | Request) => {
@@ -1053,8 +1128,8 @@ describe("Gateway Integration", () => {
               JSON.stringify({ ok: true, data: { allowed: true } }),
               {
                 status: 200,
-              }
-            )
+              },
+            ),
           );
         }
         return Promise.reject(new Error(`Unexpected URL: ${urlStr}`));
@@ -1076,7 +1151,7 @@ describe("Gateway Integration", () => {
             "Content-Length": String(deepJson.length),
             Authorization: `Bearer ${token}`,
           },
-        }
+        },
       );
 
       const res = await app.request(req);
@@ -1097,12 +1172,12 @@ describe("Gateway Integration", () => {
         const urlStr = url.toString();
         if (urlStr.includes("/internal/cms-actions")) {
           return Promise.resolve(
-            new Response(JSON.stringify({ entries: [] }), { status: 200 })
+            new Response(JSON.stringify({ entries: [] }), { status: 200 }),
           );
         }
         if (urlStr.includes("/internal/telemetry-actions")) {
           return Promise.resolve(
-            new Response(JSON.stringify({ id: "evt-1" }), { status: 201 })
+            new Response(JSON.stringify({ id: "evt-1" }), { status: 201 }),
           );
         }
         return Promise.reject(new Error(`Unexpected URL: ${urlStr}`));

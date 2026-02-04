@@ -521,6 +521,12 @@ Some routes are not workspace-scoped (e.g. `GET /me`). For these routes:
   - Auth required, but intentionally **not** RBAC-protected (invite token is the authority)
   - Included in the gateway auth-only allowlist to avoid inadvertently bypassing authz for other global routes
 
+### Workspace Members (BE-USERS-001)
+
+- `GET /workspaces/:workspaceId/members` → `accounts.workspace_members.listForWorkspace`
+  - Auth required; workspace-scoped
+  - RBAC enforced via authz service
+
 ### Generic Content API (GATEWAY-CONTENT-ROUTES-1)
 
 The gateway exposes template-driven content routes under `/content/**` so adding a new content type does not require adding new gateway routes (no per-template routes like `/programs`).
