@@ -492,6 +492,7 @@ describe("flags.route", () => {
       expect(PUBLIC_FLAG_KEYS).toContain("xynes_auth_oauth_apple");
       expect(PUBLIC_FLAG_KEYS).toContain("xynes_maintenance_mode");
       expect(PUBLIC_FLAG_KEYS).toContain("xynes_auth_password_reset");
+      expect(PUBLIC_FLAG_KEYS).toContain("xynes_auth_dashboard_apps_v1");
     });
 
     it("should not include sensitive flags as public", () => {

@@ -517,9 +517,11 @@ Some routes are not workspace-scoped (e.g. `GET /me`). For these routes:
 - `GET /workspace-invites/:token` → `accounts.invites.resolve`
   - Public (no auth / no authz)
   - `token` is forwarded as a payload field (never as an internal header)
+  - Returns extended invite preview data: `{ id, workspaceId, workspaceSlug, workspaceName, inviterName, inviterEmail, inviteeEmail, role, roleKey, status, expiresAt, createdAt }`
 - `POST /workspace-invites/:token/accept` → `accounts.invites.accept`
   - Auth required, but intentionally **not** RBAC-protected (invite token is the authority)
   - Included in the gateway auth-only allowlist to avoid inadvertently bypassing authz for other global routes
+  - Returns acceptance metadata + workspace object: `{ accepted, workspaceId, roleKey, workspaceMemberCreated, workspace }`
 
 ### Workspace Members (BE-USERS-001)
 

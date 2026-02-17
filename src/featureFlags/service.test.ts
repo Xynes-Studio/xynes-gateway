@@ -364,6 +364,7 @@ describe("DEFAULT_FLAGS", () => {
       "xynes_workspace_multiple",
       "xynes_workspace_switching",
       "xynes_workspace_creation",
+      "xynes_auth_dashboard_apps_v1",
       "xynes_maintenance_mode",
     ];
 

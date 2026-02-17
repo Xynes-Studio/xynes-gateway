@@ -507,6 +507,163 @@ describe("Gateway Integration", () => {
     );
   });
 
+  it("should proxy public GET /workspace-invites/:token to accounts.invites.resolve", async () => {
+    const app = await createApp();
+    const tokenValue = "xyn_inv_token_1234567890";
+
+    global.fetch = vi.fn((url: string | URL | Request, init?: RequestInit) => {
+      const urlStr = url.toString();
+      if (urlStr.includes("/authz/check")) {
+        throw new Error(
+          "authz should not be called for public invite resolve route",
+        );
+      }
+      if (urlStr.includes("/internal/accounts-actions")) {
+        const headers = new Headers(init?.headers);
+        expect(headers.get("X-Internal-Service-Token")).toBe(
+          "test-internal-token",
+        );
+        expect(headers.get("X-Workspace-Id")).toBeNull();
+        expect(headers.get("X-XS-User-Id")).toBeNull();
+
+        const body = JSON.parse(String(init?.body || "{}")) as {
+          actionKey?: string;
+          payload?: Record<string, unknown>;
+        };
+        expect(body.actionKey).toBe("accounts.invites.resolve");
+        expect(body.payload).toEqual({ token: tokenValue });
+
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              id: "invite-1",
+              workspaceId: "workspace-1",
+              workspaceSlug: "acme",
+              workspaceName: "Acme Inc",
+              inviterName: "Owner",
+              inviterEmail: "owner@acme.com",
+              inviteeEmail: "invitee@acme.com",
+              role: "workspace_member",
+              roleKey: "workspace_member",
+              status: "pending",
+              expiresAt: "2026-01-01T00:00:00.000Z",
+              createdAt: "2025-01-01T00:00:00.000Z",
+            }),
+            { status: 200 },
+          ),
+        );
+      }
+      if (urlStr.includes("/internal/telemetry-actions")) {
+        return Promise.resolve(
+          new Response(JSON.stringify({ id: "evt-1" }), { status: 201 }),
+        );
+      }
+      return Promise.reject(new Error(`Unknown URL: ${urlStr}`));
+    }) as unknown as typeof fetch;
+
+    const res = await app.request(`/workspace-invites/${tokenValue}`, {
+      method: "GET",
+    });
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body).toEqual(
+      expect.objectContaining({
+        ok: true,
+        data: expect.objectContaining({
+          id: "invite-1",
+          workspaceId: "workspace-1",
+          workspaceSlug: "acme",
+          roleKey: "workspace_member",
+          role: "workspace_member",
+        }),
+      }),
+    );
+  });
+
+  it("should proxy auth-only POST /workspace-invites/:token/accept to accounts.invites.accept", async () => {
+    const app = await createApp();
+    const token = signHs256ForTest(
+      { sub: "user-1", exp: 2_000_000_000 },
+      "test-jwt-secret",
+    );
+    const tokenValue = "xyn_inv_token_abcdef123456";
+
+    global.fetch = vi.fn((url: string | URL | Request, init?: RequestInit) => {
+      const urlStr = url.toString();
+      if (urlStr.includes("/authz/check")) {
+        throw new Error(
+          "authz should not be called for auth-only accounts.invites.accept route",
+        );
+      }
+      if (urlStr.includes("/internal/accounts-actions")) {
+        const headers = new Headers(init?.headers);
+        expect(headers.get("X-Internal-Service-Token")).toBe(
+          "test-internal-token",
+        );
+        expect(headers.get("X-Workspace-Id")).toBeNull();
+        expect(headers.get("X-XS-User-Id")).toBe("user-1");
+
+        const body = JSON.parse(String(init?.body || "{}")) as {
+          actionKey?: string;
+          payload?: Record<string, unknown>;
+        };
+        expect(body.actionKey).toBe("accounts.invites.accept");
+        expect(body.payload).toEqual({ token: tokenValue });
+
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              accepted: true,
+              workspaceId: "workspace-1",
+              roleKey: "workspace_member",
+              workspaceMemberCreated: true,
+              workspace: {
+                id: "workspace-1",
+                name: "Acme Inc",
+                slug: "acme",
+                planType: "free",
+                role: "workspace_member",
+              },
+            }),
+            { status: 201 },
+          ),
+        );
+      }
+      if (urlStr.includes("/internal/telemetry-actions")) {
+        return Promise.resolve(
+          new Response(JSON.stringify({ id: "evt-1" }), { status: 201 }),
+        );
+      }
+      return Promise.reject(new Error(`Unknown URL: ${urlStr}`));
+    }) as unknown as typeof fetch;
+
+    const res = await app.request(`/workspace-invites/${tokenValue}/accept`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Length": "0",
+      },
+    });
+
+    expect(res.status).toBe(201);
+    const body = await res.json();
+    expect(body).toEqual(
+      expect.objectContaining({
+        ok: true,
+        data: expect.objectContaining({
+          accepted: true,
+          workspaceId: "workspace-1",
+          roleKey: "workspace_member",
+          workspace: expect.objectContaining({
+            slug: "acme",
+            role: "workspace_member",
+          }),
+        }),
+      }),
+    );
+  });
+
   it("should resolve and proxy public GET /workspaces/:id/content/:routeSegment to cms-core (no authz, routeSegment in payload)", async () => {
     const app = await createApp();
 

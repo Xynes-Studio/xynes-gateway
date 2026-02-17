@@ -63,6 +63,7 @@ export const DEFAULT_FLAGS: Record<string, boolean> = {
   xynes_workspace_multiple: true,
   xynes_workspace_switching: true,
   xynes_workspace_creation: true,
+  xynes_auth_dashboard_apps_v1: false,
 
   // Security/Operational
   xynes_maintenance_mode: false,
@@ -91,6 +92,7 @@ export const PUBLIC_FLAG_KEYS: string[] = [
   "xynes_workspace_multiple",
   "xynes_workspace_switching",
   "xynes_workspace_creation",
+  "xynes_auth_dashboard_apps_v1",
 
   // Operational
   "xynes_maintenance_mode",
