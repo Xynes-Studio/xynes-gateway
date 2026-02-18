@@ -27,6 +27,13 @@ vi.module("../infra/config", () => ({
 }));
 
 const { createApp } = await import("../app");
+const { InMemoryRouteRepository } = await import("../data/routeRepository");
+const { TEST_ROUTES } = await import("../testUtils/routesFixture");
+
+const createTestApp = () =>
+  createApp({
+    routeRepository: new InMemoryRouteRepository(TEST_ROUTES),
+  });
 
 describe("SEC-INT-1 internal auth (stack)", () => {
   const originalFetch = global.fetch;
@@ -120,13 +127,16 @@ describe("SEC-INT-1 internal auth (stack)", () => {
           return authzApp.fetch(req);
         if (urlStr.startsWith("http://doc.local/")) return docApp.fetch(req);
         if (urlStr.startsWith("http://cms.local/")) return cmsApp.fetch(req);
-        if (urlStr.startsWith("http://telemetry.local/"))
+        if (
+          urlStr.startsWith("http://telemetry.local/") ||
+          urlStr.includes("/internal/telemetry-actions")
+        )
           return telemetryApp.fetch(req);
         throw new Error(`Unexpected fetch URL: ${urlStr}`);
       }
     ) as unknown as typeof fetch;
 
-    const app = await createApp();
+    const app = await createTestApp();
     const authToken = signHs256ForTest(
       { sub: "user-1", exp: 2_000_000_000 },
       jwtSecret

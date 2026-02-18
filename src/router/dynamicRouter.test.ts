@@ -402,6 +402,51 @@ describe("DynamicRouter", () => {
       });
     });
 
+    it("should proxy telemetry-service route to telemetry-actions endpoint", async () => {
+      const telemetryRoute: Route = {
+        id: "telemetry-1",
+        pathPattern: "/workspaces/:workspaceId/telemetry/events",
+        method: "GET",
+        serviceKey: "telemetry-service",
+        targetPath: "/workspaces/:workspaceId/telemetry/events",
+        workspaceScoped: true,
+        actionKey: "telemetry.events.listRecentForWorkspace",
+      };
+      const match = {
+        route: telemetryRoute,
+        params: { workspaceId: "ws-1" },
+      };
+      const req = new Request(
+        "http://localhost/workspaces/ws-1/telemetry/events?limit=50"
+      );
+      (req as unknown as { auth?: { userId?: string } }).auth = {
+        userId: "user-1",
+      };
+
+      (global.fetch as unknown as MockFn).mockImplementation(
+        async (url: string, init?: RequestInit) => {
+          if (url.includes("/internal/telemetry-actions")) {
+            const body = JSON.parse(String(init?.body || "{}")) as {
+              actionKey?: string;
+              payload?: Record<string, unknown>;
+            };
+            if (body.actionKey === "telemetry.events.ingest") {
+              return new Response('{"id":"evt-1"}', { status: 201 });
+            }
+            return new Response('{"events":[]}', { status: 200 });
+          }
+          return new Response("not found", { status: 404 });
+        }
+      );
+
+      const response = await router.proxyRequest(match, req, { limit: "50" });
+      expect(response.status).toBe(200);
+      expect(global.fetch).toHaveBeenCalledWith(
+        "http://localhost:3004/internal/telemetry-actions",
+        expect.any(Object)
+      );
+    });
+
     it("should return 500 if route misconfigured", async () => {
       const badRoute: Route = { ...mockRoutes[0]!, serviceKey: "" };
       const match = { route: badRoute, params: {} };

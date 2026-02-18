@@ -38,6 +38,13 @@ vi.module("../infra/bodyLimitSetup", () => ({
 }));
 
 const { createApp } = await import("../app");
+const { InMemoryRouteRepository } = await import("../data/routeRepository");
+const { TEST_ROUTES } = await import("../testUtils/routesFixture");
+
+const createTestApp = () =>
+  createApp({
+    routeRepository: new InMemoryRouteRepository(TEST_ROUTES),
+  });
 
 describe("Gateway Integration", () => {
   // We need to wait for the router to initialize (it's async in index.ts)
@@ -61,16 +68,31 @@ describe("Gateway Integration", () => {
   });
 
   it("GET /health returns 200 OK", async () => {
-    const app = await createApp();
+    const app = await createTestApp();
     const res = await app.request("/health");
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body).toEqual({ status: "ok", service: "xynes-gateway" });
   });
 
+  it("fails startup when DATABASE_URL is missing and no route repository is injected", async () => {
+    const originalDatabaseUrl = process.env.DATABASE_URL;
+    delete process.env.DATABASE_URL;
+
+    try {
+      await expect(createApp()).rejects.toThrow("DATABASE_URL");
+    } finally {
+      if (originalDatabaseUrl === undefined) {
+        delete process.env.DATABASE_URL;
+      } else {
+        process.env.DATABASE_URL = originalDatabaseUrl;
+      }
+    }
+  });
+
   it("GET /ready returns 200 when DB is reachable", async () => {
     pingDbMock.mockResolvedValueOnce(undefined);
-    const app = await createApp();
+    const app = await createTestApp();
     const res = await app.request("/ready");
     expect(res.status).toBe(200);
     const body = await res.json();
@@ -79,7 +101,7 @@ describe("Gateway Integration", () => {
 
   it("GET /ready returns 503 when DB is unreachable", async () => {
     pingDbMock.mockRejectedValueOnce(new Error("db down"));
-    const app = await createApp();
+    const app = await createTestApp();
     const res = await app.request("/ready");
     expect(res.status).toBe(503);
     const body = (await res.json()) as { status: string; error?: string };
@@ -88,7 +110,7 @@ describe("Gateway Integration", () => {
   });
 
   it("OPTIONS /me allows Authorization + X-CSRF-Token headers (CORS preflight)", async () => {
-    const app = await createApp();
+    const app = await createTestApp();
     const res = await app.request("/me", {
       method: "OPTIONS",
       headers: {
@@ -113,7 +135,7 @@ describe("Gateway Integration", () => {
   });
 
   it("should proxy POST /workspaces/:id/documents to doc-service", async () => {
-    const app = await createApp();
+    const app = await createTestApp();
     const token = signHs256ForTest(
       { sub: "user-1", exp: 2_000_000_000 },
       "test-jwt-secret",
@@ -199,7 +221,7 @@ describe("Gateway Integration", () => {
   });
 
   it("should proxy GET /me to accounts-service (auth required, no authz, no workspace header)", async () => {
-    const app = await createApp();
+    const app = await createTestApp();
     const token = signHs256ForTest(
       {
         sub: "user-1",
@@ -278,13 +300,13 @@ describe("Gateway Integration", () => {
   });
 
   it("should return 401 for GET /me when Authorization is missing", async () => {
-    const app = await createApp();
+    const app = await createTestApp();
     const res = await app.request("/me", { method: "GET" });
     expect(res.status).toBe(401);
   });
 
   it("should proxy GET /workspaces to accounts-service (auth required, authz called with workspaceId=null)", async () => {
-    const app = await createApp();
+    const app = await createTestApp();
     const token = signHs256ForTest(
       { sub: "user-1", exp: 2_000_000_000 },
       "test-jwt-secret",
@@ -355,7 +377,7 @@ describe("Gateway Integration", () => {
   });
 
   it("should proxy GET /workspaces/:id/members to accounts-service (auth required, authz called with workspaceId)", async () => {
-    const app = await createApp();
+    const app = await createTestApp();
     const token = signHs256ForTest(
       { sub: "user-1", exp: 2_000_000_000 },
       "test-jwt-secret",
@@ -429,8 +451,114 @@ describe("Gateway Integration", () => {
     expect(body.data).toEqual({ members: [] });
   });
 
+  it("should proxy GET /workspaces/:workspaceId/telemetry/events to telemetry-service", async () => {
+    const app = await createTestApp();
+    const token = signHs256ForTest(
+      { sub: "user-1", exp: 2_000_000_000 },
+      "test-jwt-secret",
+    );
+
+    global.fetch = vi.fn((url: string | URL | Request, init?: RequestInit) => {
+      const urlStr = url.toString();
+      if (urlStr.includes("/authz/check")) {
+        const body = JSON.parse(String(init?.body || "{}")) as {
+          userId?: string;
+          workspaceId?: string | null;
+          actionKey?: string;
+        };
+        expect(body.userId).toBe("user-1");
+        expect(body.workspaceId).toBe("workspace-1");
+        expect(body.actionKey).toBe("telemetry.events.listRecentForWorkspace");
+        return Promise.resolve(
+          new Response(JSON.stringify({ ok: true, data: { allowed: true } }), {
+            status: 200,
+          }),
+        );
+      }
+      if (urlStr.includes("/internal/telemetry-actions")) {
+        const body = JSON.parse(String(init?.body || "{}")) as {
+          actionKey?: string;
+          payload?: Record<string, unknown>;
+        };
+        if (body.actionKey === "telemetry.events.ingest") {
+          return Promise.resolve(
+            new Response(JSON.stringify({ id: "evt-1" }), { status: 201 }),
+          );
+        }
+
+        expect(body.actionKey).toBe("telemetry.events.listRecentForWorkspace");
+        expect(body.payload).toEqual({ limit: 20 });
+        return Promise.resolve(
+          new Response(JSON.stringify({ events: [] }), { status: 200 }),
+        );
+      }
+      return Promise.reject(new Error(`Unknown URL: ${urlStr}`));
+    }) as unknown as typeof fetch;
+
+    const res = await app.request("/workspaces/workspace-1/telemetry/events?limit=20", {
+      method: "GET",
+      headers: { Authorization: `Bearer ${token}` },
+    });
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body).toEqual(expect.objectContaining({ ok: true }));
+    expect(body.data).toEqual({ events: [] });
+  });
+
+  it("should proxy GET /workspaces/:workspaceId/telemetry/stats/routes to telemetry-service", async () => {
+    const app = await createTestApp();
+    const token = signHs256ForTest(
+      { sub: "user-1", exp: 2_000_000_000 },
+      "test-jwt-secret",
+    );
+
+    global.fetch = vi.fn((url: string | URL | Request, init?: RequestInit) => {
+      const urlStr = url.toString();
+      if (urlStr.includes("/authz/check")) {
+        const body = JSON.parse(String(init?.body || "{}")) as {
+          actionKey?: string;
+        };
+        expect(body.actionKey).toBe("telemetry.stats.summaryByRoute");
+        return Promise.resolve(
+          new Response(JSON.stringify({ ok: true, data: { allowed: true } }), {
+            status: 200,
+          }),
+        );
+      }
+      if (urlStr.includes("/internal/telemetry-actions")) {
+        const body = JSON.parse(String(init?.body || "{}")) as {
+          actionKey?: string;
+          payload?: Record<string, unknown>;
+        };
+        if (body.actionKey === "telemetry.events.ingest") {
+          return Promise.resolve(
+            new Response(JSON.stringify({ id: "evt-1" }), { status: 201 }),
+          );
+        }
+
+        expect(body.actionKey).toBe("telemetry.stats.summaryByRoute");
+        expect(body.payload).toEqual({});
+        return Promise.resolve(
+          new Response(JSON.stringify({ routes: [] }), { status: 200 }),
+        );
+      }
+      return Promise.reject(new Error(`Unknown URL: ${urlStr}`));
+    }) as unknown as typeof fetch;
+
+    const res = await app.request("/workspaces/workspace-1/telemetry/stats/routes", {
+      method: "GET",
+      headers: { Authorization: `Bearer ${token}` },
+    });
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body).toEqual(expect.objectContaining({ ok: true }));
+    expect(body.data).toEqual({ routes: [] });
+  });
+
   it("should proxy POST /workspaces to accounts-service (auth required, authz called with workspaceId=null)", async () => {
-    const app = await createApp();
+    const app = await createTestApp();
     const token = signHs256ForTest(
       { sub: "user-1", exp: 2_000_000_000 },
       "test-jwt-secret",
@@ -508,7 +636,7 @@ describe("Gateway Integration", () => {
   });
 
   it("should proxy public GET /workspace-invites/:token to accounts.invites.resolve", async () => {
-    const app = await createApp();
+    const app = await createTestApp();
     const tokenValue = "xyn_inv_token_1234567890";
 
     global.fetch = vi.fn((url: string | URL | Request, init?: RequestInit) => {
@@ -582,7 +710,7 @@ describe("Gateway Integration", () => {
   });
 
   it("should proxy auth-only POST /workspace-invites/:token/accept to accounts.invites.accept", async () => {
-    const app = await createApp();
+    const app = await createTestApp();
     const token = signHs256ForTest(
       { sub: "user-1", exp: 2_000_000_000 },
       "test-jwt-secret",
@@ -665,7 +793,7 @@ describe("Gateway Integration", () => {
   });
 
   it("should resolve and proxy public GET /workspaces/:id/content/:routeSegment to cms-core (no authz, routeSegment in payload)", async () => {
-    const app = await createApp();
+    const app = await createTestApp();
 
     global.fetch = vi.fn((url: string | URL | Request, init?: RequestInit) => {
       const urlStr = url.toString();
@@ -716,7 +844,7 @@ describe("Gateway Integration", () => {
   });
 
   it("should keep existing public blog route: GET /workspaces/:id/blog -> cms.blog_entry.listPublished", async () => {
-    const app = await createApp();
+    const app = await createTestApp();
 
     global.fetch = vi.fn((url: string | URL | Request, init?: RequestInit) => {
       const urlStr = url.toString();
@@ -756,7 +884,7 @@ describe("Gateway Integration", () => {
   });
 
   it("should keep existing public blog route: GET /workspaces/:id/blog/:slug -> cms.blog_entry.getPublishedBySlug", async () => {
-    const app = await createApp();
+    const app = await createTestApp();
 
     global.fetch = vi.fn((url: string | URL | Request, init?: RequestInit) => {
       const urlStr = url.toString();
@@ -800,7 +928,7 @@ describe("Gateway Integration", () => {
   });
 
   it("should resolve and proxy public GET /workspaces/:id/content/:routeSegment/:slug to cms-core (slug in payload)", async () => {
-    const app = await createApp();
+    const app = await createTestApp();
 
     global.fetch = vi.fn((url: string | URL | Request, init?: RequestInit) => {
       const urlStr = url.toString();
@@ -848,7 +976,7 @@ describe("Gateway Integration", () => {
   });
 
   it("Unmatched path handled by dynamicRouter (404 for now)", async () => {
-    const app = await createApp();
+    const app = await createTestApp();
     const res = await app.request("/random/path/that/does/not/exist");
     // Currently dynamicRouter.handle returns 404 for default catch-all
     expect(res.status).toBe(404);
@@ -869,7 +997,7 @@ describe("Gateway Integration", () => {
   // Test for a "matched" route if dynamicRouter logic is partially active
   // Based on 'initialRoutes' in app.ts: POST /workspaces/:workspaceId/documents
   it("Matched dynamic route handled (mock logic)", async () => {
-    const app = await createApp();
+    const app = await createTestApp();
 
     // matching request - need Content-Length for body limit check
     const bodyContent = JSON.stringify({});
@@ -899,7 +1027,7 @@ describe("Gateway Integration", () => {
   // GATEWAY-CONTENT-ROUTES-1: Generic Dynamic Public Content Routes
   describe("GATEWAY-CONTENT-ROUTES-1: Dynamic Public Content", () => {
     it("should route /workspaces/:id/content/blog to cms.content.listPublished (public, no authz)", async () => {
-      const app = await createApp();
+      const app = await createTestApp();
 
       global.fetch = vi.fn(
         (url: string | URL | Request, init?: RequestInit) => {
@@ -956,7 +1084,7 @@ describe("Gateway Integration", () => {
     });
 
     it("should route /workspaces/:id/content/blog/my-post to cms.content.getPublishedBySlug (public, no authz)", async () => {
-      const app = await createApp();
+      const app = await createTestApp();
 
       global.fetch = vi.fn(
         (url: string | URL | Request, init?: RequestInit) => {
@@ -1008,7 +1136,7 @@ describe("Gateway Integration", () => {
     it("should support any routeSegment (e.g. news, events) without gateway code changes", async () => {
       // Acceptance criteria: Adding a new type later (e.g. news) requires only
       // CMS content type setup + mapping typeKey → contentType, not any gateway code change.
-      const app = await createApp();
+      const app = await createTestApp();
 
       global.fetch = vi.fn(
         (url: string | URL | Request, init?: RequestInit) => {
@@ -1046,7 +1174,7 @@ describe("Gateway Integration", () => {
     });
 
     it("should enforce workspace context via X-Workspace-Id header even for public routes", async () => {
-      const app = await createApp();
+      const app = await createTestApp();
       let capturedWorkspaceId: string | null = null;
 
       global.fetch = vi.fn(
@@ -1077,7 +1205,7 @@ describe("Gateway Integration", () => {
     });
 
     it("should not set X-XS-User-Id for anonymous public content requests", async () => {
-      const app = await createApp();
+      const app = await createTestApp();
       let capturedUserId: string | null | undefined;
 
       global.fetch = vi.fn(
@@ -1112,7 +1240,7 @@ describe("Gateway Integration", () => {
    */
   describe("Body Size Limits (SEC-BODYLIMIT-1)", () => {
     it("should return 413 for oversized POST body", async () => {
-      const app = await createApp();
+      const app = await createTestApp();
       const token = signHs256ForTest(
         { sub: "user-1", exp: 2_000_000_000 },
         "test-jwt-secret",
@@ -1165,7 +1293,7 @@ describe("Gateway Integration", () => {
     });
 
     it("should allow normal-sized POST body within limits", async () => {
-      const app = await createApp();
+      const app = await createTestApp();
       const token = signHs256ForTest(
         { sub: "user-1", exp: 2_000_000_000 },
         "test-jwt-secret",
@@ -1220,7 +1348,7 @@ describe("Gateway Integration", () => {
     });
 
     it("should return 400 for malformed JSON body", async () => {
-      const app = await createApp();
+      const app = await createTestApp();
       const token = signHs256ForTest(
         { sub: "user-1", exp: 2_000_000_000 },
         "test-jwt-secret",
@@ -1271,7 +1399,7 @@ describe("Gateway Integration", () => {
     });
 
     it("should reject deeply nested JSON (JSON bomb protection)", async () => {
-      const app = await createApp();
+      const app = await createTestApp();
       const token = signHs256ForTest(
         { sub: "user-1", exp: 2_000_000_000 },
         "test-jwt-secret",
@@ -1323,7 +1451,7 @@ describe("Gateway Integration", () => {
     });
 
     it("should skip body limit for GET requests", async () => {
-      const app = await createApp();
+      const app = await createTestApp();
 
       global.fetch = vi.fn((url: string | URL | Request) => {
         const urlStr = url.toString();

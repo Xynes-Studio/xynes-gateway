@@ -378,7 +378,21 @@ Gateway JWT validation is designed to be **fail-closed** when security-relevant 
 
 ### Adding Routes
 
-Currently, routes are seeded in-memory in `src/app.ts`. Future updates will fetch routes from Postgres.
+Routes are loaded from `platform.routes` in Postgres via `PostgresRouteRepository` (`src/data/postgresRouteRepository.ts`).
+
+- Runtime route source is DB-only (no in-memory runtime fallback).
+- Startup is fail-closed:
+  - `DATABASE_URL` missing => startup error.
+  - query failure / invalid route row => startup error.
+  - zero loaded routes => startup error.
+- Route rows are validated and normalized in `src/data/routeValidation.ts` before registration.
+- Duplicate route matchers (`method + pathPattern`) are rejected at startup to avoid ambiguous routing.
+
+#### Route Loading Structure (Developer-Friendly Segregation)
+
+- `src/data/routeRepository.ts`: repository contract + in-memory test repository.
+- `src/data/postgresRouteRepository.ts`: DB-backed route loader implementation.
+- `src/data/routeValidation.ts`: pure mapping, validation, duplicate-check, and deterministic sort helpers.
 
 ## Proxy Architecture (GATE-2)
 
@@ -388,7 +402,8 @@ The Dynamic Router implements a "Smart Proxy" pattern:
 3. **Action Mapping**: Maps matched route to a downstream "Action" endpoint.
    - `doc-service` -> `${DOC_SERVICE_URL}/internal/doc-actions`
    - `cms-core` -> `${CMS_CORE_URL}/internal/cms-actions`
-  - `accounts-service` -> `${ACCOUNTS_SERVICE_URL}/internal/accounts-actions`
+   - `accounts-service` -> `${ACCOUNTS_SERVICE_URL}/internal/accounts-actions`
+   - `telemetry-service` -> `${TELEMETRY_SERVICE_URL}/internal/telemetry-actions`
 4. **Payload Construction**: Builds a single JSON payload object by merging request JSON body + query + path params (path params win; `workspaceId` is header-only).
 5. **Telemetry**: Asynchronously records request tracking.
 
@@ -584,10 +599,12 @@ All API responses are wrapped in a standard envelope:
 ### Configuration
 
 Ensure the following environment variables are set:
+- `DATABASE_URL`: Postgres connection string. Required at startup for DB-backed route loading.
 - `DOC_SERVICE_URL`: URL of the Document Service (default: `http://localhost:3001`)
 - `CMS_CORE_URL`: URL of the CMS Core Service (default: `http://localhost:3003`)
 - `ACCOUNTS_SERVICE_URL`: URL of the Accounts Service (default: `http://localhost:<port>`)
 - `AUTHZ_SERVICE_URL`: URL of the Authorization Service (default: `http://localhost:3002`)
+- `TELEMETRY_SERVICE_URL`: URL of the Telemetry Service (default: `http://localhost:3004`)
 - `INTERNAL_SERVICE_TOKEN`: Shared secret for internal service calls (sent as `X-Internal-Service-Token`)
 - `JWT_SECRET`: HS256 JWT secret used to validate `Authorization: Bearer <JWT>` and derive `X-XS-User-Id` for protected routes
 - `JWT_ISSUER`: Expected `iss` claim (when set, tokens must match). If missing, gateway logs a startup warning and does not enforce `iss`.
@@ -595,6 +612,9 @@ Ensure the following environment variables are set:
 - `JWT_REQUIRE_ISS_AUD_IN_PROD`: Optional guard. When set to `1`/`true`, gateway refuses to start in `NODE_ENV=production` unless both `JWT_ISSUER` and `JWT_AUDIENCE` are set.
 - `JWT_PUBLIC_KEY`: Optional PEM public key for RS256 validation (alternative to `JWT_JWKS_URL`)
 - `JWT_JWKS_URL`: Optional JWKS URL for RS256 validation. When set, the gateway fetches and caches JWKS in-memory with a TTL; only `https://` URLs are allowed and redirects are rejected. Hostnames must not be `localhost` or a private IP literal (note: DNS resolution is not performed, so ensure your hostname cannot resolve to private IPs).
+
+Route prerequisite:
+- `platform.routes` must be seeded with valid rows before starting the gateway.
 
 ## Rate Limiting (SEC-RATELIMIT-1)
 

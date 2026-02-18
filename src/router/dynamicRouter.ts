@@ -402,6 +402,11 @@ export class DynamicRouter {
       case "accountsservice":
         serviceUrl = config.services.accounts;
         break;
+      case "telemetry_service":
+      case "telemetry-service":
+      case "telemetryservice":
+        serviceUrl = config.services.telemetry;
+        break;
       default: {
         console.error(`[DynamicRouter] Unknown serviceKey: ${serviceKey}`);
         const unknownServiceError = createErrorResponse(
@@ -441,6 +446,12 @@ export class DynamicRouter {
       serviceKeyNormalized === "accountsservice"
     ) {
       actionEndpoint = `${serviceUrl}/internal/accounts-actions`;
+    } else if (
+      serviceKeyNormalized === "telemetry_service" ||
+      serviceKeyNormalized === "telemetry-service" ||
+      serviceKeyNormalized === "telemetryservice"
+    ) {
+      actionEndpoint = `${serviceUrl}/internal/telemetry-actions`;
     } else {
       // Generic fallback or specific?
       actionEndpoint = `${serviceUrl}/internal/actions`;
