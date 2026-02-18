@@ -42,7 +42,9 @@ export class PostgresRouteRepository implements RouteRepository {
   private async fetchRowsFromDatabase(): Promise<PlatformRouteRow[]> {
     const databaseUrl = this.databaseUrl ?? process.env.DATABASE_URL;
     if (!databaseUrl) {
-      throw new Error("DATABASE_URL environment variable is required");
+      throw new Error(
+        "[PostgresRouteRepository] DATABASE_URL environment variable is required",
+      );
     }
 
     let sql: ReturnType<typeof import("postgres").default> | null = null;

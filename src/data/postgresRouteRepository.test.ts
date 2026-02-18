@@ -52,7 +52,7 @@ describe("PostgresRouteRepository", () => {
         id: "6ae00901-8e50-491a-b092-3d36b803cba8",
         method: "GET",
         pathPattern: "/workspaces/:workspaceId/blog",
-        targetPath: "/workspaces/:workspaceId/blog",
+        targetPath: "/blog",
         serviceKey: "cms-core",
         actionKey: "cms.blog_entry.listPublished",
         workspaceScoped: true,
@@ -220,6 +220,74 @@ describe("PostgresRouteRepository", () => {
 
     await expect(repository.getRoutes()).rejects.toThrow(
       "duplicate route matcher",
+    );
+  });
+
+  it("throws when duplicate matcher shape differs only by param name/trailing slash", async () => {
+    const repository = new PostgresRouteRepository({
+      fetchRows: async () => [
+        {
+          id: "route-1",
+          method: "GET",
+          path_pattern: "/users/:id",
+          service_key: "accounts-service",
+          action_key: "accounts.workspaces.listForUser",
+          workspace_scoped: false,
+          is_public: true,
+        },
+        {
+          id: "route-2",
+          method: "GET",
+          path_pattern: "/users/:userId/",
+          service_key: "accounts-service",
+          action_key: "accounts.workspaces.listForUser",
+          workspace_scoped: false,
+          is_public: true,
+        },
+      ],
+    });
+
+    await expect(repository.getRoutes()).rejects.toThrow(
+      "duplicate route matcher",
+    );
+  });
+
+  it("maps null action_key to undefined for public routes", async () => {
+    const repository = new PostgresRouteRepository({
+      fetchRows: async () => [
+        {
+          id: "public-1",
+          method: "GET",
+          path_pattern: "/public/blog",
+          service_key: "cms-core",
+          action_key: null,
+          workspace_scoped: false,
+          is_public: true,
+        },
+      ],
+    });
+
+    const routes = await repository.getRoutes();
+    expect(routes[0]?.actionKey).toBeUndefined();
+  });
+
+  it("throws when non-public route has null action_key", async () => {
+    const repository = new PostgresRouteRepository({
+      fetchRows: async () => [
+        {
+          id: "private-1",
+          method: "GET",
+          path_pattern: "/private/stats",
+          service_key: "telemetry-service",
+          action_key: null,
+          workspace_scoped: false,
+          is_public: false,
+        },
+      ],
+    });
+
+    await expect(repository.getRoutes()).rejects.toThrow(
+      "action_key is required for non-public route",
     );
   });
 });

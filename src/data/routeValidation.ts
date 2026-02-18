@@ -5,7 +5,7 @@ export interface PlatformRouteRow {
   method: string;
   path_pattern: string;
   service_key: string;
-  action_key: string;
+  action_key?: string | null;
   workspace_scoped: boolean;
   is_public: boolean;
 }
@@ -111,21 +111,28 @@ export function mapPlatformRouteRowToRoute(row: PlatformRouteRow): Route {
   const serviceKey = normalizeServiceKey(
     assertNonEmptyString(row.service_key, "service_key"),
   );
-  const actionKey = normalizeActionKey(
-    assertNonEmptyString(row.action_key, "action_key"),
-  );
+  const actionKey =
+    row.action_key === null || row.action_key === undefined
+      ? undefined
+      : normalizeActionKey(assertNonEmptyString(row.action_key, "action_key"));
   const workspaceScoped = assertBoolean(
     row.workspace_scoped,
     "workspace_scoped",
   );
   const isPublic = assertBoolean(row.is_public, "is_public");
 
+  if (!isPublic && !actionKey) {
+    throw new Error(
+      `[RouteValidation] action_key is required for non-public route: ${pathPattern}`,
+    );
+  }
+
   return {
     id,
     method,
     pathPattern,
     // Compatibility shim: dynamic router expects targetPath.
-    targetPath: pathPattern,
+    targetPath: deriveTargetPath(pathPattern),
     serviceKey,
     actionKey,
     workspaceScoped,
@@ -136,7 +143,6 @@ export function mapPlatformRouteRowToRoute(row: PlatformRouteRow): Route {
 function pathStats(pathPattern: string): {
   staticSegments: number;
   dynamicSegments: number;
-  totalSegments: number;
 } {
   const segments = pathPattern.split("/").filter(Boolean);
   let staticSegments = 0;
@@ -153,8 +159,36 @@ function pathStats(pathPattern: string): {
   return {
     staticSegments,
     dynamicSegments,
-    totalSegments: segments.length,
   };
+}
+
+function normalizeMatcherPath(pathPattern: string): string {
+  const normalizedPath = pathPattern.replace(/\/$/, "") || "/";
+  const segments = normalizedPath.split("/").filter(Boolean);
+  const matcherSegments = segments.map((segment) =>
+    segment.startsWith(":") ? ":" : segment,
+  );
+  return `/${matcherSegments.join("/")}`.replace(/\/$/, "") || "/";
+}
+
+function deriveTargetPath(pathPattern: string): string {
+  const workspacePrefix = "/workspaces/:workspaceId";
+  if (pathPattern === workspacePrefix) {
+    return "/";
+  }
+  if (pathPattern.startsWith(`${workspacePrefix}/`)) {
+    return pathPattern.slice(workspacePrefix.length) || "/";
+  }
+
+  const genericWorkspacePrefix = "/:workspaceId";
+  if (pathPattern === genericWorkspacePrefix) {
+    return "/";
+  }
+  if (pathPattern.startsWith(`${genericWorkspacePrefix}/`)) {
+    return pathPattern.slice(genericWorkspacePrefix.length) || "/";
+  }
+
+  return pathPattern;
 }
 
 export function sortRoutesBySpecificity(routes: Route[]): Route[] {
@@ -170,11 +204,6 @@ export function sortRoutesBySpecificity(routes: Route[]): Route[] {
     // Fewer dynamic parameters first.
     if (leftStats.dynamicSegments !== rightStats.dynamicSegments) {
       return leftStats.dynamicSegments - rightStats.dynamicSegments;
-    }
-
-    // Deeper route patterns first.
-    if (leftStats.totalSegments !== rightStats.totalSegments) {
-      return rightStats.totalSegments - leftStats.totalSegments;
     }
 
     // Stable, deterministic fallback ordering.
@@ -194,7 +223,8 @@ export function assertNoDuplicateMatchers(routes: Route[]): void {
   const seen = new Map<string, string>();
 
   for (const route of routes) {
-    const matcherKey = `${route.method.toUpperCase()} ${route.pathPattern}`;
+    const matcherPath = normalizeMatcherPath(route.pathPattern);
+    const matcherKey = `${route.method.toUpperCase()} ${matcherPath}`;
     const existingRouteId = seen.get(matcherKey);
     if (existingRouteId) {
       throw new Error(
