@@ -299,6 +299,91 @@ describe("Gateway Integration", () => {
     expect(body.data).toEqual(expect.objectContaining({ workspaces: [] }));
   });
 
+  it("should proxy PATCH /me/profile to accounts-service (auth required, no authz, no workspace header)", async () => {
+    const app = await createTestApp();
+    const token = signHs256ForTest(
+      {
+        sub: "user-1",
+        email: "user-1@example.com",
+        name: "User One",
+        avatar_url: "https://example.com/u1.png",
+        exp: 2_000_000_000,
+      },
+      "test-jwt-secret",
+    );
+
+    global.fetch = vi.fn((url: string | URL | Request, init?: RequestInit) => {
+      const urlStr = url.toString();
+      if (urlStr.includes("/authz/check")) {
+        throw new Error(
+          "authz should not be called for accounts.user.updateSelf",
+        );
+      }
+      if (urlStr.includes("/internal/accounts-actions")) {
+        const headers = new Headers(init?.headers);
+        expect(headers.get("X-Internal-Service-Token")).toBe(
+          "test-internal-token",
+        );
+        expect(headers.get("X-Workspace-Id")).toBeNull();
+        expect(headers.get("X-XS-User-Id")).toBe("user-1");
+        expect(headers.get("X-XS-User-Email")).toBe("user-1@example.com");
+        expect(headers.get("X-XS-User-Name")).toBe("User One");
+        expect(headers.get("X-XS-User-Avatar-Url")).toBe(
+          "https://example.com/u1.png",
+        );
+
+        const body = JSON.parse(String(init?.body || "{}")) as {
+          actionKey?: string;
+          payload?: Record<string, unknown>;
+        };
+        expect(body.actionKey).toBe("accounts.user.updateSelf");
+        expect(body.payload).toEqual({ displayName: "Alice Doe" });
+
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              id: "user-1",
+              email: "user-1@example.com",
+              displayName: "Alice Doe",
+              avatarUrl: "https://example.com/u1.png",
+            }),
+            { status: 200 },
+          ),
+        );
+      }
+      if (urlStr.includes("/internal/telemetry-actions")) {
+        return Promise.resolve(
+          new Response(JSON.stringify({ id: "evt-1" }), { status: 201 }),
+        );
+      }
+      return Promise.reject(new Error(`Unknown URL: ${urlStr}`));
+    }) as unknown as typeof fetch;
+
+    const bodyContent = JSON.stringify({ displayName: "Alice Doe" });
+    const res = await app.request("/me/profile", {
+      method: "PATCH",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+        "Content-Length": String(bodyContent.length),
+        "X-XS-User-Id": "attacker",
+        "X-Workspace-Id": "attacker-workspace",
+        "X-Internal-Service-Token": "attacker-token",
+      },
+      body: bodyContent,
+    });
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body).toEqual(expect.objectContaining({ ok: true }));
+    expect(body.data).toEqual(
+      expect.objectContaining({
+        id: "user-1",
+        displayName: "Alice Doe",
+      }),
+    );
+  });
+
   it("should return 401 for GET /me when Authorization is missing", async () => {
     const app = await createTestApp();
     const res = await app.request("/me", { method: "GET" });

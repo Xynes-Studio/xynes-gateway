@@ -296,6 +296,33 @@ describe("DynamicRouter", () => {
       expect(result).toEqual({ authorized: true, userId: "user-1" });
       expect(mockAuthzService.check).not.toHaveBeenCalled();
     });
+
+    it("should skip authz for /me/profile action when workspaceScoped=false", async () => {
+      const profileRoute: Route = {
+        id: "me-profile-1",
+        pathPattern: "/me/profile",
+        method: "PATCH",
+        serviceKey: "accounts-service",
+        targetPath: "/me/profile",
+        workspaceScoped: false,
+        actionKey: "accounts.user.updateSelf",
+      };
+      const match = { route: profileRoute, params: {} };
+
+      const token = signHs256ForTest(
+        { sub: "user-1", exp: 2_000_000_000 },
+        "test-jwt-secret"
+      );
+      const req = new Request("http://localhost/me/profile", {
+        method: "PATCH",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+
+      const result = await router.authorize(match as RouteMatch, req);
+
+      expect(result).toEqual({ authorized: true, userId: "user-1" });
+      expect(mockAuthzService.check).not.toHaveBeenCalled();
+    });
   });
   describe("proxyRequest", () => {
     beforeEach(() => {

@@ -16,6 +16,16 @@ export const TEST_ROUTES: Route[] = [
     isPublic: false,
   },
   {
+    id: "me-2",
+    method: "PATCH",
+    pathPattern: "/me/profile",
+    targetPath: "/me/profile",
+    serviceKey: "accounts-service",
+    actionKey: "accounts.user.updateSelf",
+    workspaceScoped: false,
+    isPublic: false,
+  },
+  {
     id: "workspaces-1",
     method: "GET",
     pathPattern: "/workspaces",
