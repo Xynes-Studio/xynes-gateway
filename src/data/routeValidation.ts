@@ -120,10 +120,24 @@ export function mapPlatformRouteRowToRoute(row: PlatformRouteRow): Route {
     "workspace_scoped",
   );
   const isPublic = assertBoolean(row.is_public, "is_public");
+  const hasWorkspacePrefix = hasWorkspacePathPrefix(pathPattern);
+  const targetPath = deriveTargetPath(pathPattern);
 
   if (!isPublic && !actionKey) {
     throw new Error(
       `[RouteValidation] action_key is required for non-public route: ${pathPattern}`,
+    );
+  }
+
+  if (workspaceScoped && !hasWorkspacePrefix) {
+    throw new Error(
+      `[RouteValidation] workspace_scoped mismatch in mapPlatformRouteRowToRoute/deriveTargetPath for dynamicRouter: workspace_scoped=true requires '/workspaces/:workspaceId' or '/:workspaceId' prefix in path_pattern '${pathPattern}'`,
+    );
+  }
+
+  if (!workspaceScoped && hasWorkspacePrefix) {
+    throw new Error(
+      `[RouteValidation] workspace_scoped mismatch in mapPlatformRouteRowToRoute/deriveTargetPath for dynamicRouter: workspace_scoped=false cannot use workspace prefix in path_pattern '${pathPattern}'`,
     );
   }
 
@@ -132,12 +146,21 @@ export function mapPlatformRouteRowToRoute(row: PlatformRouteRow): Route {
     method,
     pathPattern,
     // Compatibility shim: dynamic router expects targetPath.
-    targetPath: deriveTargetPath(pathPattern),
+    targetPath,
     serviceKey,
     actionKey,
     workspaceScoped,
     isPublic,
   };
+}
+
+function hasWorkspacePathPrefix(pathPattern: string): boolean {
+  return (
+    pathPattern === "/workspaces/:workspaceId" ||
+    pathPattern.startsWith("/workspaces/:workspaceId/") ||
+    pathPattern === "/:workspaceId" ||
+    pathPattern.startsWith("/:workspaceId/")
+  );
 }
 
 function pathStats(pathPattern: string): {

@@ -290,4 +290,44 @@ describe("PostgresRouteRepository", () => {
       "action_key is required for non-public route",
     );
   });
+
+  it("throws when workspace_scoped is true but path_pattern has no workspace prefix", async () => {
+    const repository = new PostgresRouteRepository({
+      fetchRows: async () => [
+        {
+          id: "ws-true-mismatch",
+          method: "GET",
+          path_pattern: "/me",
+          service_key: "accounts-service",
+          action_key: "accounts.me.getOrCreate",
+          workspace_scoped: true,
+          is_public: false,
+        },
+      ],
+    });
+
+    await expect(repository.getRoutes()).rejects.toThrow(
+      "workspace_scoped mismatch",
+    );
+  });
+
+  it("throws when workspace_scoped is false but path_pattern uses workspace prefix", async () => {
+    const repository = new PostgresRouteRepository({
+      fetchRows: async () => [
+        {
+          id: "ws-false-mismatch",
+          method: "GET",
+          path_pattern: "/workspaces/:workspaceId/blog",
+          service_key: "cms-core",
+          action_key: "cms.blog_entry.listPublished",
+          workspace_scoped: false,
+          is_public: true,
+        },
+      ],
+    });
+
+    await expect(repository.getRoutes()).rejects.toThrow(
+      "workspace_scoped mismatch",
+    );
+  });
 });
