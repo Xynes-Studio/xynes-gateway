@@ -654,7 +654,7 @@ describe("Gateway Integration", () => {
     }) as unknown as typeof fetch;
 
     const res = await app.request(
-      "/workspaces/workspace-1/content-types?includeTemplates=true",
+      "/workspaces/workspace-1/content-types?includeTemplates=true&workspaceId=forged-workspace",
       {
         method: "GET",
         headers: { Authorization: `Bearer ${token}` },
