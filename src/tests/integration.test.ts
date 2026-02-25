@@ -591,6 +591,87 @@ describe("Gateway Integration", () => {
     expect(body.data).toEqual({ events: [] });
   });
 
+  it("should proxy GET /workspaces/:workspaceId/content-types to cms-core (auth required, query -> payload)", async () => {
+    const app = await createTestApp();
+    const token = signHs256ForTest(
+      { sub: "user-1", exp: 2_000_000_000 },
+      "test-jwt-secret",
+    );
+
+    global.fetch = vi.fn((url: string | URL | Request, init?: RequestInit) => {
+      const urlStr = url.toString();
+      if (urlStr.includes("/authz/check")) {
+        const body = JSON.parse(String(init?.body || "{}")) as {
+          userId?: string;
+          workspaceId?: string;
+          actionKey?: string;
+        };
+        expect(body.userId).toBe("user-1");
+        expect(body.workspaceId).toBe("workspace-1");
+        expect(body.actionKey).toBe("cms.content_types.listForWorkspace");
+        return Promise.resolve(
+          new Response(JSON.stringify({ ok: true, data: { allowed: true } }), {
+            status: 200,
+          }),
+        );
+      }
+      if (urlStr.includes("/internal/cms-actions")) {
+        const headers = new Headers(init?.headers);
+        expect(headers.get("X-Internal-Service-Token")).toBe(
+          "test-internal-token",
+        );
+        expect(headers.get("X-Workspace-Id")).toBe("workspace-1");
+        expect(headers.get("X-XS-User-Id")).toBe("user-1");
+
+        const body = JSON.parse(String(init?.body || "{}")) as {
+          actionKey?: string;
+          payload?: Record<string, unknown>;
+        };
+        expect(body.actionKey).toBe("cms.content_types.listForWorkspace");
+        expect(body.payload).toEqual({ includeTemplates: true });
+
+        return Promise.resolve(
+          new Response(
+            JSON.stringify([
+              {
+                id: "ct-1",
+                name: "Blog",
+                slug: "blog-posts",
+                routeSegment: "blog",
+                templateKey: "blog_post",
+              },
+            ]),
+            { status: 200 },
+          ),
+        );
+      }
+      if (urlStr.includes("/internal/telemetry-actions")) {
+        return Promise.resolve(
+          new Response(JSON.stringify({ id: "evt-1" }), { status: 201 }),
+        );
+      }
+      return Promise.reject(new Error(`Unknown URL: ${urlStr}`));
+    }) as unknown as typeof fetch;
+
+    const res = await app.request(
+      "/workspaces/workspace-1/content-types?includeTemplates=true&workspaceId=forged-workspace",
+      {
+        method: "GET",
+        headers: { Authorization: `Bearer ${token}` },
+      },
+    );
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body).toEqual(expect.objectContaining({ ok: true }));
+    expect(body.data).toEqual([
+      expect.objectContaining({
+        id: "ct-1",
+        routeSegment: "blog",
+      }),
+    ]);
+  });
+
   it("should proxy GET /workspaces/:workspaceId/telemetry/stats/routes to telemetry-service", async () => {
     const app = await createTestApp();
     const token = signHs256ForTest(

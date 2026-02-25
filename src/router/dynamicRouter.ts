@@ -495,6 +495,7 @@ export class DynamicRouter {
     const safeQuery: Record<string, unknown> = Object.create(null);
     for (const [key, value] of Object.entries(query)) {
       if (DynamicRouter.UNSAFE_PAYLOAD_KEYS.has(key)) continue;
+      if (key === "workspaceId") continue;
       safeQuery[key] = DynamicRouter.coerceQueryValue(value);
     }
     DynamicRouter.copySafe(payload, safeQuery);

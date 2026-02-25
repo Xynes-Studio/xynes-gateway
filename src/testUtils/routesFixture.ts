@@ -146,6 +146,16 @@ export const TEST_ROUTES: Route[] = [
     isPublic: true,
   },
   {
+    id: "content-types-1",
+    method: "GET",
+    pathPattern: "/workspaces/:workspaceId/content-types",
+    targetPath: "/content-types",
+    serviceKey: "cms-core",
+    actionKey: "cms.content_types.listForWorkspace",
+    workspaceScoped: true,
+    isPublic: false,
+  },
+  {
     id: "5",
     method: "POST",
     pathPattern: "/workspaces/:workspaceId/content-entries/:entryId/comments",
