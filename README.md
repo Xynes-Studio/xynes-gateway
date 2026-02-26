@@ -26,4 +26,12 @@ bun run index.ts
   - `accounts.user.updateSelf`
   - `accounts.invites.accept`
 
+## Gateway-Wide Audit Logging
+
+- Global middleware in `src/logging/middleware.ts` captures all outcomes (2xx/4xx/5xx/429/404/static/dynamic).
+- Canonical payload type: `GatewayAccessLogV1` (`src/logging/types.ts`).
+- Asynchronous delivery with bounded queue and retry/backoff (`src/logging/dispatcher.ts`).
+- Canonical telemetry action: `telemetry.gateway.logs.ingest`.
+- Legacy dual-write (`telemetry.events.ingest`) is optional via `GATEWAY_LOG_EMIT_LEGACY_EVENTS=true`.
+
 This project was created using `bun init` in bun v1.2.18. [Bun](https://bun.sh) is a fast all-in-one JavaScript runtime.

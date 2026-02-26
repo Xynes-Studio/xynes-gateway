@@ -23,6 +23,7 @@ import {
 } from "../featureFlags";
 import { extractBearerToken, verifyJwt } from "../utils/jwt";
 import { config } from "../infra/config";
+import type { GatewayRouteMeta } from "../logging/types";
 
 /**
  * Auth verification function type.
@@ -92,6 +93,11 @@ export function createFlagsRoute(
     return url.searchParams.get("workspaceId") || undefined;
   }
 
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  function setRouteMeta(c: any, routeMeta: GatewayRouteMeta): void {
+    c.set("gatewayRouteMeta", routeMeta);
+  }
+
   /**
    * GET /flags
    *
@@ -106,13 +112,32 @@ export function createFlagsRoute(
    * }
    */
   route.get("/", async (c) => {
+    const workspaceId = extractWorkspaceId(c) ?? null;
+    setRouteMeta(c, {
+      routeId: "static.flags.list",
+      pathPattern: "/flags",
+      serviceKey: "gateway",
+      actionKey: "gateway.flags.list",
+      workspaceId,
+      userId: null,
+    });
+
     const auth = await tryAuthenticate(c.req.header("Authorization"));
 
     if (auth) {
+      setRouteMeta(c, {
+        routeId: "static.flags.list",
+        pathPattern: "/flags",
+        serviceKey: "gateway",
+        actionKey: "gateway.flags.list",
+        workspaceId,
+        userId: auth.userId,
+      });
+
       // Authenticated - return all personalized flags
       const context: FeatureFlagContext = {
         userId: auth.userId,
-        workspaceId: extractWorkspaceId(c),
+        workspaceId: workspaceId ?? undefined,
       };
 
       try {
@@ -160,7 +185,28 @@ export function createFlagsRoute(
   route.get("/:key", async (c) => {
     const { key } = c.req.param();
     const isPublicFlag = PUBLIC_FLAG_KEYS.includes(key);
+    const workspaceId = extractWorkspaceId(c) ?? null;
+    setRouteMeta(c, {
+      routeId: "static.flags.get",
+      pathPattern: "/flags/:key",
+      serviceKey: "gateway",
+      actionKey: "gateway.flags.get",
+      workspaceId,
+      userId: null,
+    });
+
     const auth = await tryAuthenticate(c.req.header("Authorization"));
+
+    if (auth) {
+      setRouteMeta(c, {
+        routeId: "static.flags.get",
+        pathPattern: "/flags/:key",
+        serviceKey: "gateway",
+        actionKey: "gateway.flags.get",
+        workspaceId,
+        userId: auth.userId,
+      });
+    }
 
     // If not a public flag, require authentication
     if (!isPublicFlag && !auth) {
@@ -178,7 +224,7 @@ export function createFlagsRoute(
     }
 
     const context: FeatureFlagContext = auth
-      ? { userId: auth.userId, workspaceId: extractWorkspaceId(c) }
+      ? { userId: auth.userId, workspaceId: workspaceId ?? undefined }
       : { userId: "anonymous" };
 
     try {

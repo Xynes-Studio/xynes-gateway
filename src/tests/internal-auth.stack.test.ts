@@ -5,6 +5,8 @@ import { signHs256ForTest } from "../testUtils/jwtTestUtils";
 
 const token = "stack-test-token";
 const jwtSecret = "stack-jwt-secret";
+const originalGatewayAuditEnabled = process.env.GATEWAY_AUDIT_ENABLED;
+process.env.GATEWAY_AUDIT_ENABLED = "true";
 
 vi.module("../infra/config", () => ({
   config: {
@@ -111,6 +113,11 @@ describe("SEC-INT-1 internal auth (stack)", () => {
   });
 
   afterAll(() => {
+    if (originalGatewayAuditEnabled === undefined) {
+      delete process.env.GATEWAY_AUDIT_ENABLED;
+    } else {
+      process.env.GATEWAY_AUDIT_ENABLED = originalGatewayAuditEnabled;
+    }
     global.fetch = originalFetch;
     vi.restoreAllMocks();
   });

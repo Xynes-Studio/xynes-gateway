@@ -2,9 +2,9 @@ import { Hono } from "hono";
 import { extractBearerToken, verifyJwt } from "./utils/jwt";
 import { buildInternalHeaders } from "./security/internalHeaders";
 import { cors } from "hono/cors";
-import { logger } from "./middleware/logger";
 import { errorHandler } from "./middleware/error-handler";
 import { requestId } from "./middleware/requestId";
+import { gatewayLoggingMiddleware } from "./logging";
 import { DynamicRouter } from "./router/dynamicRouter";
 import type { RouteRepository } from "./data/routeRepository";
 import { PostgresRouteRepository } from "./data/postgresRouteRepository";
@@ -16,6 +16,7 @@ import { createFlagsRoute } from "./routes/flags.route";
 import { FeatureFlagService } from "./featureFlags";
 import { createRateLimiterFromConfig } from "./infra/rateLimitSetup";
 import { createBodyLimiterFromConfig } from "./infra/bodyLimitSetup";
+import type { GatewayRouteMeta } from "./logging/types";
 
 export interface CreateAppOptions {
   routeRepository?: RouteRepository;
@@ -60,7 +61,7 @@ export const createApp = async (
 
   // Middleware
   app.use("*", requestId);
-  app.use("*", logger);
+  app.use("*", gatewayLoggingMiddleware);
   app.onError(errorHandler);
 
   // Routes - Health/Ready (no auth)
@@ -71,6 +72,16 @@ export const createApp = async (
   // Note: accounts-service does not currently expose a dedicated check-slug action.
   // We approximate availability by checking the current user's workspaces.
   app.get("/workspaces/check-slug/:slug", async (c) => {
+    const routeMeta: GatewayRouteMeta = {
+      routeId: "static.workspaces.check_slug",
+      pathPattern: "/workspaces/check-slug/:slug",
+      serviceKey: "gateway",
+      actionKey: "gateway.workspaces.checkSlug",
+      workspaceId: null,
+      userId: null,
+    };
+    c.set("gatewayRouteMeta", routeMeta);
+
     const slug = (c.req.param("slug") || "").toLowerCase();
     if (!slug) return c.json({ available: false }, 400);
 
@@ -87,6 +98,8 @@ export const createApp = async (
 
     const userId = typeof claims?.sub === "string" ? claims.sub : null;
     if (!userId) return c.json({ available: false }, 401);
+    routeMeta.userId = userId;
+    c.set("gatewayRouteMeta", routeMeta);
 
     const requestId = (c.get("requestId") as string | undefined) ?? null;
     const headers = buildInternalHeaders(c.req.raw.headers, {

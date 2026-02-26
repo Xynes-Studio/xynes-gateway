@@ -9,15 +9,16 @@ The gateway is built using Bun and Hono. It acts as the entry point for all Xyne
 
 - **App Entry**: `src/app.ts` initializes the Hono app, middleware, and routes.
 - **Dynamic Router**: `src/router/dynamicRouter.ts` handles dynamic route matching and authorization against the Authz Service.
+- **Logging Pipeline** (`src/logging/**`):
+  - `middleware.ts`: global non-blocking request outcome capture (`finally` semantics)
+  - `context.ts`: canonical request log context builder
+  - `redaction.ts`: snippet redaction/truncation policy
+  - `ip.ts`, `geo.ts`, `device.ts`: IP hashing + coarse geo + device classification
+  - `dispatcher.ts`: bounded async queue, retry/backoff, telemetry emission
 - **Middleware**:
-  - `logger.ts`: Request logging.
-  - `error-handler.ts`: Standardized error responses.
+  - `error-handler.ts`: standardized error responses.
 - **Services**:
   - `authzService.ts`: Integration with Authz Service.
-- **Telemetry Module** (`src/telemetry/`):
-  - `types.ts`: Canonical telemetry event types (TELE-GW-1).
-  - `sanitize.ts`: Privacy-safe sanitization utilities.
-  - `service.ts`: Fire-and-forget telemetry service client.
 
 ## Development
 
@@ -34,10 +35,11 @@ These conventions are enforced to keep the gateway consistent with broader platf
 
 - **Folder segregation (keep boundaries tight)**
   - `src/router/**`: request matching, authorization orchestration, proxying decisions.
+  - `src/logging/**`: gateway-wide audit logging (context, redaction, dispatch).
   - `src/security/**`: header ownership rules, JWKS URL policy, startup security warnings.
   - `src/utils/**`: pure helpers (JWT verification, URL sanitation, request IDs, error mapping).
   - `src/services/**`: outbound integrations (authz, downstream proxy helpers).
-  - `src/telemetry/**`: telemetry module (types, sanitization, service client).
+  - `src/telemetry/**`: legacy compatibility helpers only; new access logs flow through `src/logging/**`.
   - `src/featureFlags/**`: PostHog feature flags module (INFRA-BE-1).
   - `src/middleware/**`: Hono middleware only (logging, error handling, request IDs, rate limiting, auth).
   - `src/rateLimit/**`: rate limiting module (types, key builder, config repository, stores).
@@ -102,91 +104,50 @@ We follow the platform test pyramid described in `../xynes-cms-core/docs/adr/001
    bun run lint
    ```
 
-## Sanitized Gateway Telemetry Events (TELE-GW-1)
+## Gateway Access Logging (GATEWAY-AUDIT-1)
 
-The gateway emits standardized, sanitized telemetry events for all HTTP requests. This feature ensures no secrets or PII are logged while maintaining enough information for debugging and analytics.
+The gateway is the canonical capture point for all request outcomes: success, auth failures, upstream failures, rate-limit rejections, unmatched paths, and static routes.
 
-### Architecture
+### Canonical Flow
 
 ```text
-┌───────────────────┐     ┌────────────────────┐     ┌─────────────────────┐
-│   Gateway         │     │  Sanitization      │     │  Telemetry Service  │
-│   (request)       │────▶│  + Event Builder   │────▶│  (ingestion)        │
-│                   │     │  (src/telemetry/)  │     │                     │
-└───────────────────┘     └────────────────────┘     └─────────────────────┘
+request -> requestId middleware -> gateway logging middleware (finally)
+       -> route handlers/dynamic router
+       -> build GatewayAccessLogV1
+       -> async dispatcher queue
+       -> telemetry.gateway.logs.ingest
 ```
 
-### Module Structure (`src/telemetry/`)
+### Canonical Payload
 
-| File | Purpose |
-|------|---------|
-| `types.ts` | Canonical `HttpRequestTelemetryEvent` interface and constants |
-| `sanitize.ts` | Privacy-safe sanitization utilities (`hashClientIp`, `stripQueryAndHash`, `truncateUserAgent`) |
-| `service.ts` | `GatewayTelemetryService` - fire-and-forget client with internal JWT auth |
-| `index.ts` | Module exports |
+`GatewayAccessLogV1` includes:
+- request identifiers and timestamps
+- method/path/pathPattern/routeId/serviceKey/actionKey
+- status/duration/error code
+- user/workspace context
+- hashed client IP only (no raw IP)
+- coarse geo and device classification
+- redacted/truncated request/response snippets
 
-### Event Schema
+### Async Guarantees
 
-```typescript
-interface HttpRequestTelemetryEvent {
-  type: 'http_request';           // Always "http_request"
-  routeId: string | null;         // Route ID from route config
-  serviceKey: string | null;      // Target service (e.g., "doc-service")
-  actionKey: string | null;       // Action name (e.g., "docs.document.create")
-  method: string;                 // HTTP method
-  path: string;                   // Sanitized path (no query string!)
-  statusCode: number;             // HTTP response status
-  durationMs: number;             // Request duration in milliseconds
-  workspaceId: string | null;     // Workspace context
-  userId: string | null;          // Authenticated user ID
-  clientIpHash: string | undefined; // One-way SHA-256 hash of client IP
-  timestamp: string;              // ISO 8601 timestamp
-  meta: {
-    userAgent?: string;           // Truncated to 256 chars
-    pathPattern?: string | null;  // Route pattern (e.g., "/workspaces/:id/documents")
-    errorCode?: string | null;    // Error code for error responses
-  };
-}
-```
+- logging never blocks client responses
+- bounded queue with overflow-drop protection
+- retry/backoff for transient telemetry failures
+- legacy `telemetry.events.ingest` emission is optional via `GATEWAY_LOG_EMIT_LEGACY_EVENTS=true`
 
-### Security Measures
+### Logging Environment Variables
 
-| Field | Protection |
-|-------|------------|
-| `path` | Query strings and fragments stripped (may contain tokens) |
-| `clientIpHash` | SHA-256 hashed with salt, truncated to 16 chars |
-| `meta.userAgent` | Truncated to 256 characters |
-| Authorization headers | **Never included** in telemetry |
-| Cookies | **Never included** in telemetry |
-| Request body | **Never included** in telemetry |
-
-### Action Key
-
-The gateway uses the canonical action key `telemetry.events.ingest` for all HTTP request telemetry.
-
-### Fire-and-Forget Behavior
-
-- Telemetry failures **never** block or fail user requests
-- Errors are logged to console but do not propagate
-- Uses internal JWT authentication (SEC-INTERNAL-AUTH-2)
-
-### Testing
-
-```bash
-# Run telemetry module tests
-bun test src/telemetry/
-
-# Verify sanitization
-bun test src/telemetry/sanitize.test.ts
-```
-
-### Acceptance Criteria
-
-- ✅ Query strings are stripped from paths (`?token=secret` → removed)
-- ✅ Client IPs are one-way hashed (not reversible)
-- ✅ User agents are truncated to prevent oversized payloads
-- ✅ Telemetry failures do not affect request handling
-- ✅ All code paths emit telemetry (success, auth failure, rate limit, 404)
+| Variable | Purpose | Default |
+|----------|---------|---------|
+| `GATEWAY_AUDIT_ENABLED` | Enable/disable gateway audit pipeline | enabled (except tests) |
+| `GATEWAY_LOG_QUEUE_SIZE` | Max in-memory queue size | `5000` |
+| `GATEWAY_LOG_RETRY_MAX` | Max retry attempts | `3` |
+| `GATEWAY_LOG_RETRY_BASE_MS` | Retry backoff base milliseconds | `200` |
+| `GATEWAY_LOG_REQ_SNIPPET_MAX` | Request snippet max bytes | `2048` |
+| `GATEWAY_LOG_RES_SNIPPET_MAX` | Response snippet max bytes | `2048` |
+| `GATEWAY_GEOIP_DB_PATH` | Optional local coarse geo DB path | unset |
+| `GATEWAY_LOG_EMIT_LEGACY_EVENTS` | Dual-write to legacy telemetry action | `false` |
 
 ## Feature Flags (INFRA-BE-1)
 

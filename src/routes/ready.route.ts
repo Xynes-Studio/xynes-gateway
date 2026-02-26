@@ -1,9 +1,20 @@
 import { Hono } from 'hono';
 import { pingDb } from '../infra/db';
+import type { GatewayRouteMeta } from '../logging/types';
 
 const readyRoute = new Hono();
 
 readyRoute.get('/ready', async (c) => {
+  const routeMeta: GatewayRouteMeta = {
+    routeId: "static.ready",
+    pathPattern: "/ready",
+    serviceKey: "gateway",
+    actionKey: "gateway.ready",
+    workspaceId: null,
+    userId: null,
+  };
+  c.set("gatewayRouteMeta", routeMeta);
+
   try {
     await pingDb(process.env.DATABASE_URL, 'platform');
     return c.json({ status: 'ready' }, 200);

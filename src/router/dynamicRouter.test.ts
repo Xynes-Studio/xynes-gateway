@@ -531,130 +531,25 @@ describe("DynamicRouter", () => {
       expect(body.error?.code).toBe("INVALID_JSON");
     });
 
-    it("should send telemetry event on successful proxy", async () => {
+    it("should not emit telemetry directly from proxyRequest", async () => {
       const route = mockRoutes[0];
       const match = { route: route!, params: { workspaceId: "123" } };
       const req = new Request(
-        "http://localhost/workspaces/123/documents?token=supersecret&foo=bar",
+        "http://localhost/workspaces/123/documents?token=supersecret",
         {
           method: "POST",
-          headers: { "X-XS-User-Id": "attacker" },
         }
       );
-      (req as unknown as { auth?: { userId?: string } }).auth = {
-        userId: "user-1",
-      };
 
-      // Mock fetch to handle both calls
-      (global.fetch as unknown as MockFn).mockImplementation(async (url) => {
-        if (url.includes("doc-actions")) {
-          return new Response('{"id":"doc-1"}', { status: 201 });
-        }
-        if (url.includes("telemetry-actions")) {
-          return new Response('{"id":"evt-1"}', { status: 201 });
-        }
-        return new Response("Not Found", { status: 404 });
-      });
-
-      await router.proxyRequest(match, req, {});
-
-      // Wait for fire-and-forget telemetry
-      await new Promise((resolve) => setTimeout(resolve, 0));
-
-      expect(global.fetch).toHaveBeenCalledTimes(2);
-
-      const telemetryCall = (global.fetch as unknown as MockFn).mock.calls.find(
-        (call) => (call[0] as string).includes("telemetry-actions")
+      (global.fetch as unknown as MockFn).mockResolvedValue(
+        new Response('{"id":"doc-1"}', { status: 201 })
       );
-      expect(telemetryCall).toBeDefined();
-
-      const telemetryHeaders = telemetryCall![1].headers as Headers;
-      expect(telemetryHeaders.get("X-Internal-Service-Token")).toBe(
-        "test-internal-token"
-      );
-
-      const body = JSON.parse(telemetryCall![1].body);
-      expect(body.actionKey).toBe("telemetry.events.ingest");
-      expect(body.payload.source).toBe("gateway");
-      expect(body.payload.eventType).toBe("http_request");
-      expect(body.payload.targetType).toBe("service");
-      expect(body.payload.targetId).toBe("doc-service");
-      // TELE-GW-1: New canonical event format stores data in metadata
-      expect(body.payload.metadata.path).toBe("/workspaces/123/documents");
-      expect(telemetryCall![1].body).not.toContain("supersecret");
-      expect(telemetryCall![1].body).not.toContain("token=");
-      expect(body.payload.metadata.statusCode).toBe(201);
-      expect(body.payload.metadata.userId).toBe("user-1");
-      expect(body.payload.metadata.workspaceId).toBe("123");
-      expect(body.payload.metadata.durationMs).toBeGreaterThanOrEqual(0);
-      // TELE-GW-1: New fields
-      expect(body.payload.metadata.type).toBe("http_request");
-      expect(body.payload.metadata.routeId).toBeDefined();
-    });
-
-    it("should send telemetry event even if proxy returns error status", async () => {
-      const route = mockRoutes[0];
-      const match = { route: route!, params: { workspaceId: "123" } };
-      const req = new Request("http://localhost/workspaces/123/documents", {
-        method: "POST",
-      });
-
-      (global.fetch as unknown as MockFn).mockImplementation(async (url) => {
-        if (url.includes("doc-actions")) {
-          // Downstream service internal error
-          return new Response('{"error":"oops"}', { status: 500 });
-        }
-        if (url.includes("telemetry-actions")) {
-          return new Response('{"id":"evt-1"}', { status: 201 });
-        }
-        return new Response("Not Found", { status: 404 });
-      });
 
       const response = await router.proxyRequest(match, req, {});
-      expect(response.status).toBe(500);
-
-      await new Promise((resolve) => setTimeout(resolve, 0));
-
-      const telemetryCall = (global.fetch as unknown as MockFn).mock.calls.find(
-        (call) => (call[0] as string).includes("telemetry-actions")
-      );
-      expect(telemetryCall).toBeDefined();
-      const body = JSON.parse(telemetryCall![1].body);
-      expect(body.payload.metadata.statusCode).toBe(500);
-    });
-
-    it("should NOT fail request if telemetry fails", async () => {
-      const route = mockRoutes[0];
-      const match = { route: route!, params: { workspaceId: "123" } };
-      const req = new Request("http://localhost/workspaces/123/documents", {
-        method: "POST",
-      });
-      const consoleSpy = vi
-        .spyOn(console, "error")
-        .mockImplementation(() => {});
-
-      (global.fetch as unknown as MockFn).mockImplementation(async (url) => {
-        if (url.includes("doc-actions")) {
-          return new Response('{"id":"doc-1"}', { status: 201 });
-        }
-        if (url.includes("telemetry-actions")) {
-          return Promise.reject(new Error("Telemetry Down"));
-        }
-        return new Response("Not Found", { status: 404 });
-      });
-
-      const response = await router.proxyRequest(match, req, {});
-      expect(response.status).toBe(201); // Main request succeeds
-
-      await new Promise((resolve) => setTimeout(resolve, 100));
-
-      // Should have logged error - updated message format for TELE-GW-1
-      expect(consoleSpy).toHaveBeenCalledWith(
-        expect.stringContaining(
-          "[GatewayTelemetryService] Error: Telemetry Down"
-        )
-      );
-      consoleSpy.mockRestore();
+      expect(response.status).toBe(201);
+      expect(global.fetch).toHaveBeenCalledTimes(1);
+      const [url] = (global.fetch as unknown as MockFn).mock.calls[0] ?? [];
+      expect(String(url)).toContain("/internal/doc-actions");
     });
   });
 });
