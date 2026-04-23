@@ -481,8 +481,8 @@ Some routes are not workspace-scoped (e.g. `GET /me`). For these routes:
 **Current Public Routes:**
 - `GET /workspaces/:workspaceId/blog` – List published blog entries.
 - `GET /workspaces/:workspaceId/blog/:slug` – Get published blog entry by slug.
-- `GET /workspaces/:workspaceId/content/:routeSegment` – Generic published content listing (template-driven).
-- `GET /workspaces/:workspaceId/content/:routeSegment/:slug` – Generic published content by slug (template-driven).
+- `GET /workspaces/:workspaceId/content/:routeSegment` – Generic published content listing (legacy/public compatibility route).
+- `GET /workspaces/:workspaceId/content/:routeSegment/:slug` – Generic published content by slug (legacy/public compatibility route).
 - `GET /workspace-invites/:token` – Resolve a workspace invite by token (INVITES-CORE-1).
 
 ### Workspace Invites (INVITES-CORE-1)
@@ -507,7 +507,7 @@ Some routes are not workspace-scoped (e.g. `GET /me`). For these routes:
 
 ### Generic Content API (GATEWAY-CONTENT-ROUTES-1)
 
-The gateway exposes template-driven content routes under `/content/**` so adding a new content type does not require adding new gateway routes (no per-template routes like `/programs`).
+The gateway exposes compatibility content routes under `/content/**` for public template-style reads. Dashboard authoring remains directory-first and uses `/content/entries` flows.
 
 **Routes:**
 - `GET /workspaces/:workspaceId/content/:routeSegment` → `cms.content.listPublished`
@@ -521,7 +521,7 @@ The gateway exposes template-driven content routes under `/content/**` so adding
 **Payload mapping:**
 - `routeSegment` (typeKey) and `slug` are forwarded as top-level payload keys
 - Workspace context is enforced via the `:workspaceId` path param even for public routes
-- CMS service resolves `routeSegment` to a `contentTypeId` per workspace
+- CMS service resolves `routeSegment` via internal publish routing per workspace
 
 **Security considerations:**
 - Gateway skips authz check for `isPublic = true` routes
@@ -530,10 +530,10 @@ The gateway exposes template-driven content routes under `/content/**` so adding
 - Pagination limits are enforced to prevent DoS
 
 **Acceptance criteria:**
-- For a workspace with a `blog_post` type keyed as `blog`:
+- For a workspace with published content keyed as `blog`:
   - `GET /workspaces/<id>/content/blog` returns published blog posts
   - `GET /workspaces/<id>/content/blog/some-slug` returns that entry
-- Adding a new type (e.g. `news`) requires only CMS content type setup + mapping `routeSegment → contentType`, not any gateway code change
+- Adding a new public segment (e.g. `news`) requires only CMS-side mapping, not any gateway code change
 
 ### Standard Response Envelope (GATE-4)
 

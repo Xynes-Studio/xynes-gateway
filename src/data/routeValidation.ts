@@ -28,14 +28,15 @@ const ALLOWED_SERVICE_KEYS = new Set([
 ]);
 
 const ACTION_KEY_PATTERN =
-  /^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*\.[A-Za-z][A-Za-z0-9_]*$/;
+  /^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*\.[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)*$/;
 
-const PATH_PATTERN =
-  /^\/[A-Za-z0-9\-._~!$&'()*+,;=:@/]*$/;
+const PATH_PATTERN = /^\/[A-Za-z0-9\-._~!$&'()*+,;=:@/]*$/;
 
 function assertNonEmptyString(value: unknown, fieldName: string): string {
   if (typeof value !== "string" || value.trim().length === 0) {
-    throw new Error(`[RouteValidation] ${fieldName} must be a non-empty string`);
+    throw new Error(
+      `[RouteValidation] ${fieldName} must be a non-empty string`,
+    );
   }
   return value.trim();
 }
@@ -50,9 +51,7 @@ function assertBoolean(value: unknown, fieldName: string): boolean {
 function normalizeMethod(method: string): string {
   const normalized = method.toUpperCase();
   if (!ALLOWED_METHODS.has(normalized)) {
-    throw new Error(
-      `[RouteValidation] unsupported HTTP method: ${method}`,
-    );
+    throw new Error(`[RouteValidation] unsupported HTTP method: ${method}`);
   }
   return normalized;
 }
@@ -88,9 +87,7 @@ function normalizePathPattern(pathPattern: string): string {
 function normalizeServiceKey(serviceKey: string): string {
   const normalized = serviceKey.toLowerCase();
   if (!ALLOWED_SERVICE_KEYS.has(normalized)) {
-    throw new Error(
-      `[RouteValidation] unsupported serviceKey: ${serviceKey}`,
-    );
+    throw new Error(`[RouteValidation] unsupported serviceKey: ${serviceKey}`);
   }
   return normalized;
 }

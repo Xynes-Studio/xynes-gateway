@@ -56,13 +56,13 @@ export class DynamicRouter {
   constructor(
     routes: Route[],
     authzService: IAuthzService,
-    rateLimiter?: RateLimiter
+    rateLimiter?: RateLimiter,
   );
   constructor(options: DynamicRouterOptions);
   constructor(
     routesOrOptions: Route[] | DynamicRouterOptions,
     authzService?: IAuthzService,
-    rateLimiter?: RateLimiter
+    rateLimiter?: RateLimiter,
   ) {
     if (Array.isArray(routesOrOptions)) {
       // Legacy constructor: (routes, authzService, rateLimiter?)
@@ -76,6 +76,50 @@ export class DynamicRouter {
       this.rateLimiter = routesOrOptions.rateLimiter;
       this.bodyLimiter = routesOrOptions.bodyLimiter;
     }
+  }
+
+  private static routeSpecificityScore(pathPattern: string): {
+    staticSegments: number;
+    dynamicSegments: number;
+    totalSegments: number;
+  } {
+    const segments = pathPattern.replace(/\/$/, "").split("/").filter(Boolean);
+
+    let staticSegments = 0;
+    let dynamicSegments = 0;
+
+    for (const segment of segments) {
+      if (segment.startsWith(":")) {
+        dynamicSegments += 1;
+      } else {
+        staticSegments += 1;
+      }
+    }
+
+    return {
+      staticSegments,
+      dynamicSegments,
+      totalSegments: segments.length,
+    };
+  }
+
+  private static compareRouteSpecificity(left: Route, right: Route): number {
+    const leftScore = DynamicRouter.routeSpecificityScore(left.pathPattern);
+    const rightScore = DynamicRouter.routeSpecificityScore(right.pathPattern);
+
+    if (leftScore.staticSegments !== rightScore.staticSegments) {
+      return rightScore.staticSegments - leftScore.staticSegments;
+    }
+
+    if (leftScore.dynamicSegments !== rightScore.dynamicSegments) {
+      return leftScore.dynamicSegments - rightScore.dynamicSegments;
+    }
+
+    if (leftScore.totalSegments !== rightScore.totalSegments) {
+      return rightScore.totalSegments - leftScore.totalSegments;
+    }
+
+    return left.id.localeCompare(right.id);
   }
 
   /**
@@ -114,7 +158,7 @@ export class DynamicRouter {
   ]);
 
   private static isPlainRecord(
-    value: unknown
+    value: unknown,
   ): value is Record<string, unknown> {
     return (
       value !== null &&
@@ -126,7 +170,7 @@ export class DynamicRouter {
 
   private static copySafe(
     target: Record<string, unknown>,
-    source: Record<string, unknown>
+    source: Record<string, unknown>,
   ): void {
     for (const [key, value] of Object.entries(source)) {
       if (DynamicRouter.UNSAFE_PAYLOAD_KEYS.has(key)) continue;
@@ -149,17 +193,33 @@ export class DynamicRouter {
    * Finds a matching route for the given method and path.
    */
   findMatch(method: string, path: string): RouteMatch | null {
+    const normalizedMethod = method.toUpperCase();
+    const matches: RouteMatch[] = [];
+
     for (const route of this.routes) {
-      if (route.method.toUpperCase() !== method.toUpperCase()) {
+      if (route.method.toUpperCase() !== normalizedMethod) {
         continue;
       }
 
       const params = this.matchPath(route.pathPattern, path);
       if (params) {
-        return { route, params };
+        matches.push({ route, params });
       }
     }
-    return null;
+
+    if (matches.length === 0) {
+      return null;
+    }
+
+    if (matches.length === 1) {
+      return matches[0] ?? null;
+    }
+
+    matches.sort((left, right) =>
+      DynamicRouter.compareRouteSpecificity(left.route, right.route),
+    );
+
+    return matches[0] ?? null;
   }
 
   /**
@@ -168,7 +228,7 @@ export class DynamicRouter {
    */
   matchPath(
     pattern: string,
-    actualPath: string
+    actualPath: string,
   ): Record<string, string> | null {
     // strip trailing slash
     const normalize = (p: string) => p.replace(/\/$/, "") || "/";
@@ -206,7 +266,7 @@ export class DynamicRouter {
    */
   private static attachRequestAuth(
     request: Request,
-    claims: JwtClaims | null
+    claims: JwtClaims | null,
   ): string | null {
     const userId =
       typeof claims?.sub === "string" && claims.sub.length > 0
@@ -235,7 +295,7 @@ export class DynamicRouter {
   }
 
   private async getAuthResult(
-    request: Request
+    request: Request,
   ): Promise<{ userId: string | null; claims: JwtClaims | null }> {
     const holder = request as unknown as Record<
       symbol,
@@ -272,7 +332,7 @@ export class DynamicRouter {
 
   async authorize(
     match: RouteMatch,
-    request: Request
+    request: Request,
   ): Promise<
     | { authorized: true; userId: string | null }
     | { authorized: false; status: number; errorCode: string; message: string }
@@ -282,7 +342,7 @@ export class DynamicRouter {
     // Enforce workspace context even for public routes.
     if (route.workspaceScoped && !params.workspaceId) {
       console.warn(
-        `[DynamicRouter] Blocked request to ${route.pathPattern}: Missing workspaceId in params`
+        `[DynamicRouter] Blocked request to ${route.pathPattern}: Missing workspaceId in params`,
       );
       return {
         authorized: false,
@@ -307,7 +367,7 @@ export class DynamicRouter {
     const { userId } = await this.getAuthResult(request);
     if (!userId) {
       console.warn(
-        `[DynamicRouter] Blocked request to ${route.pathPattern}: Missing/invalid Authorization token`
+        `[DynamicRouter] Blocked request to ${route.pathPattern}: Missing/invalid Authorization token`,
       );
       return {
         authorized: false,
@@ -336,7 +396,7 @@ export class DynamicRouter {
     const allowed = await this.authzService.check(
       userId,
       workspaceId,
-      route.actionKey
+      route.actionKey,
     );
     if (!allowed) {
       return {
@@ -357,7 +417,7 @@ export class DynamicRouter {
     match: RouteMatch,
     request: Request,
     query: Record<string, string>,
-    requestId?: string
+    requestId?: string,
   ): Promise<Response> {
     const { route, params } = match;
     const { serviceKey, actionKey } = route;
@@ -369,12 +429,12 @@ export class DynamicRouter {
 
     if (!serviceKey || !actionKey) {
       console.error(
-        `[DynamicRouter] Route ${route.pathPattern} missing serviceKey or actionKey`
+        `[DynamicRouter] Route ${route.pathPattern} missing serviceKey or actionKey`,
       );
       const errorResponse = createErrorResponse(
         "INTERNAL_ERROR",
         "Route misconfiguration",
-        reqId
+        reqId,
       );
       return new Response(JSON.stringify(errorResponse), {
         status: 500,
@@ -411,7 +471,7 @@ export class DynamicRouter {
         const unknownServiceError = createErrorResponse(
           "BAD_GATEWAY",
           "Service not found",
-          reqId
+          reqId,
         );
         return new Response(JSON.stringify(unknownServiceError), {
           status: 502,
@@ -472,7 +532,7 @@ export class DynamicRouter {
           const errorResponse = createErrorResponse(
             "INVALID_JSON",
             "Invalid JSON payload",
-            reqId
+            reqId,
           );
           return new Response(JSON.stringify(errorResponse), {
             status: 400,
@@ -540,7 +600,7 @@ export class DynamicRouter {
       const gatewayError = createErrorResponse(
         "BAD_GATEWAY",
         "Upstream service unavailable",
-        reqId
+        reqId,
       );
       response = new Response(JSON.stringify(gatewayError), {
         status: 502,
@@ -557,7 +617,7 @@ export class DynamicRouter {
    */
   private async wrapResponse(
     response: Response,
-    requestId: string
+    requestId: string,
   ): Promise<Response> {
     const status = response.status;
 
@@ -582,7 +642,7 @@ export class DynamicRouter {
         const errorResponse = createErrorResponse(
           errorCode,
           errorMessage,
-          requestId
+          requestId,
         );
         return new Response(JSON.stringify(errorResponse), {
           status,
@@ -596,7 +656,7 @@ export class DynamicRouter {
       const errorResponse = createErrorResponse(
         errorCode,
         errorMessage,
-        requestId
+        requestId,
       );
       return new Response(JSON.stringify(errorResponse), {
         status: status >= 400 ? status : 500,
@@ -614,7 +674,7 @@ export class DynamicRouter {
   private async checkRateLimit(
     match: RouteMatch,
     request: Request,
-    requestId: string
+    requestId: string,
   ): Promise<RateLimitCheckResult> {
     if (!this.rateLimiter) {
       return { response: null, headers: {} };
@@ -647,7 +707,7 @@ export class DynamicRouter {
       const errorResponse = createErrorResponse(
         "RATE_LIMIT_EXCEEDED",
         "Too many requests. Please try again later.",
-        requestId
+        requestId,
       );
 
       const headers = new Headers({
@@ -677,7 +737,7 @@ export class DynamicRouter {
   private async checkBodyLimit(
     match: RouteMatch,
     request: Request,
-    requestId: string
+    requestId: string,
   ): Promise<BodyLimitCheckResult> {
     // Skip body check for methods that don't have bodies
     const method = request.method.toUpperCase();
@@ -701,7 +761,7 @@ export class DynamicRouter {
           const errorResponse = createErrorResponse(
             "INVALID_CONTENT_LENGTH",
             "Invalid Content-Length header.",
-            requestId
+            requestId,
           );
           return {
             response: new Response(JSON.stringify(errorResponse), {
@@ -715,7 +775,7 @@ export class DynamicRouter {
         const errorResponse = createErrorResponse(
           "INVALID_CONTENT_LENGTH",
           "Invalid Content-Length header.",
-          requestId
+          requestId,
         );
         return {
           response: new Response(JSON.stringify(errorResponse), {
@@ -742,7 +802,7 @@ export class DynamicRouter {
       const errorResponse = createErrorResponse(
         "CONTENT_LENGTH_REQUIRED",
         "Content-Length header is required.",
-        requestId
+        requestId,
       );
       return {
         response: new Response(JSON.stringify(errorResponse), {
@@ -759,7 +819,7 @@ export class DynamicRouter {
         const errorResponse = createErrorResponse(
           "BODY_NOT_ALLOWED",
           "Request body not allowed for this endpoint.",
-          requestId
+          requestId,
         );
         return {
           response: new Response(JSON.stringify(errorResponse), {
@@ -773,7 +833,7 @@ export class DynamicRouter {
         const errorResponse = createErrorResponse(
           "PAYLOAD_TOO_LARGE",
           "Request body too large.",
-          requestId
+          requestId,
         );
         return {
           response: new Response(JSON.stringify(errorResponse), {
@@ -790,7 +850,7 @@ export class DynamicRouter {
   private setRouteMeta(
     c: Context,
     match: RouteMatch | null,
-    userId: string | null
+    userId: string | null,
   ): void {
     const routeMeta: GatewayRouteMeta = {
       routeId: match?.route.id ?? null,
@@ -823,7 +883,7 @@ export class DynamicRouter {
         const errorResponse = createErrorResponse(
           auth.errorCode,
           auth.message,
-          requestId
+          requestId,
         );
         return c.json(errorResponse, auth.status);
       }
@@ -834,12 +894,12 @@ export class DynamicRouter {
       const bodyLimitCheck = await this.checkBodyLimit(
         match,
         c.req.raw,
-        requestId
+        requestId,
       );
       if (bodyLimitCheck.response) {
         this.setErrorCode(
           c,
-          mapStatusToErrorCode(bodyLimitCheck.response.status)
+          mapStatusToErrorCode(bodyLimitCheck.response.status),
         );
         return bodyLimitCheck.response;
       }
@@ -849,7 +909,7 @@ export class DynamicRouter {
       const rateLimitCheck = await this.checkRateLimit(
         match,
         c.req.raw,
-        requestId
+        requestId,
       );
       if (rateLimitCheck.response) {
         this.setErrorCode(c, "RATE_LIMIT_EXCEEDED");
@@ -861,7 +921,7 @@ export class DynamicRouter {
         match,
         c.req.raw,
         c.req.query(),
-        requestId
+        requestId,
       );
 
       // Propagate rate limit headers to successful responses
@@ -889,7 +949,7 @@ export class DynamicRouter {
     const notFoundResponse = createErrorResponse(
       "NOT_FOUND",
       "Not Found",
-      requestId
+      requestId,
     );
     return c.json(notFoundResponse, 404);
   };
