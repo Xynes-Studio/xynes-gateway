@@ -297,6 +297,13 @@ schema is owned by
   both swallow errors from the audit-write path.
 - Verifier exceptions (e.g. malformed stored hash) resolve to `null`, so
   one corrupt row cannot crash the gateway.
+- **Unparseable `expires_at` fails closed.** `Date.parse(<garbage>)` is
+  `NaN`, and `NaN <= now()` is `false` in JavaScript — a naive `<=` check
+  would silently let a corrupted timestamp pass the expiry gate. The repo
+  explicitly checks `Number.isNaN(expiresAtMs)` and returns `null` for
+  any non-null but unparseable value. The DB column is `timestamptz` so
+  this is near-impossible in practice, but defense-in-depth requires we
+  never trust a row that violates the column contract.
 
 ### Folder structure & layering
 

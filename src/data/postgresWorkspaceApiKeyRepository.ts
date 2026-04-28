@@ -286,8 +286,16 @@ export class PostgresWorkspaceApiKeyRepository implements WorkspaceApiKeyReposit
     // Cheap structural checks first — these never reveal hash material,
     // so it's safe to short-circuit on them.
     if (row.status !== "active") return null;
-    if (row.expires_at !== null && Date.parse(row.expires_at) <= Date.now()) {
-      return null;
+    if (row.expires_at !== null) {
+      // SECURITY (defense-in-depth): `Date.parse` returns NaN for
+      // unparseable strings, and `NaN <= now()` is FALSE in JavaScript.
+      // A naive `<=` check would silently accept a corrupted timestamp.
+      // The DB column is `timestamptz` so this is near-impossible, but
+      // if it ever happens we fail closed rather than leak access.
+      const expiresAtMs = Date.parse(row.expires_at);
+      if (Number.isNaN(expiresAtMs) || expiresAtMs <= Date.now()) {
+        return null;
+      }
     }
 
     // Hash verification is the only authoritative check. A throw from a

@@ -169,6 +169,26 @@ describe("PostgresWorkspaceApiKeyRepository", () => {
       expect(resolved).not.toBeNull();
     });
 
+    it("fails closed when expires_at is non-null but unparseable", async () => {
+      // SECURITY (defense-in-depth): the DB column is `timestamptz` so the
+      // schema makes this near-impossible, but if a corrupted row ever
+      // surfaces an unparseable `expires_at`, `Date.parse` returns NaN
+      // and `NaN <= now` is FALSE in JavaScript — which would naively let
+      // the row pass the expiry gate. The repo MUST treat any non-null
+      // unparseable timestamp as "expired / unsafe" and refuse the key.
+      const repo = new PostgresWorkspaceApiKeyRepository({
+        fetchRowByPrefix: async () => ({
+          ...ACTIVE_ROW,
+          expires_at: "this is not a date",
+        }),
+        verifyHash: async () => true, // would otherwise succeed
+      });
+
+      const resolved = await repo.resolveByRawKey(VALID_RAW_KEY, VALID_PREFIX);
+
+      expect(resolved).toBeNull();
+    });
+
     it("never embeds the raw key in errors when fetchRowByPrefix throws", async () => {
       const repo = new PostgresWorkspaceApiKeyRepository({
         fetchRowByPrefix: async () => {
