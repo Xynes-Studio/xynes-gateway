@@ -101,8 +101,10 @@ export class GatewayTelemetryService implements IGatewayTelemetryService {
       },
     };
 
-    // Fire and forget
-    this.sendTelemetry(actionPayload, input.workspaceId, input.userId);
+    // Fire and forget. Use the SANITIZED event for header forwarding so that
+    // an API-key actor never gets `X-XS-User-Id` set (the builder nulls
+    // `userId` for non-user actors).
+    this.sendTelemetry(actionPayload, event.workspaceId, event.userId);
   }
 
   /**

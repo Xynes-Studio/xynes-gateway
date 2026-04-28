@@ -314,3 +314,44 @@ export async function resolveApiKeyCredential(
 
   return resolved;
 }
+
+/**
+ * Structural-shape probe: returns `true` iff the request presented a
+ * structurally-valid API-key-shaped credential on either
+ * `Authorization: Bearer xynes_live_...` or `X-XS-API-Key: xynes_live_...`.
+ *
+ * IMPORTANT — STRICTNESS CONTRACT:
+ *
+ * This probe MUST be byte-for-byte aligned with {@link extractApiKeyCredential}.
+ * If the probe says `true`, `extractApiKeyCredential` MUST return a
+ * non-null credential for the same headers (modulo the conflicting-headers
+ * branch, which throws). If the alignment slips, callers like
+ * `dynamicRouter.requestPresentsApiKey` (fail-closed gate) and
+ * `logging/middleware.shouldEmitApiKeyTelemetry` (anonymous-401 audit
+ * gate) will diverge from the actual auth-resolution outcome.
+ *
+ * Specifically rejects (matching `parseRawKey`):
+ * - case-different markers (`XYNES_LIVE_...` is not accepted)
+ * - uppercase hex in the secret portion
+ * - any leading or trailing whitespace/junk on the raw value
+ * - any total length other than {@link MAX_RAW_API_KEY_LENGTH}
+ * - oversized header values (DoS guard, before any parsing)
+ *
+ * The raw key value is NEVER returned, logged, or stored — the probe
+ * only confirms shape, never identity.
+ *
+ * Single source of truth for both:
+ * - `dynamicRouter.requestPresentsApiKey` (fail-closed gating in the
+ *   auth resolver)
+ * - `logging/middleware.shouldEmitApiKeyTelemetry` (anonymous-401
+ *   telemetry gate so the audit trail mirrors the resolver's view)
+ */
+export function requestHasApiKeyShape(headers: Headers): boolean {
+  const fromAuth = readAuthorizationHeader(headers);
+  if (fromAuth !== null && parseRawKey(fromAuth) !== null) return true;
+
+  const fromXs = readXsApiKeyHeader(headers);
+  if (fromXs !== null && parseRawKey(fromXs) !== null) return true;
+
+  return false;
+}

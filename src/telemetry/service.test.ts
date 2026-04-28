@@ -304,12 +304,136 @@ describe("GatewayTelemetryService (TELE-GW-1)", () => {
         path: "/test",
         statusCode: 200,
         durationMs: 10,
+        actionKey: null,
       });
       const elapsed = Date.now() - start;
 
       // Should return almost immediately (< 10ms)
       expect(elapsed).toBeLessThan(10);
       expect(fetchResolved).toBe(false);
+    });
+  });
+
+  describe("workspace API key actor (Task 5)", () => {
+    const apiKeyInput: HttpRequestTelemetryInput = {
+      routeId: "route-cms-1",
+      serviceKey: "cms-core",
+      actionKey: "cms.content.listPublished",
+      method: "GET",
+      path: "/workspaces/ws-1/content/blog",
+      statusCode: 200,
+      durationMs: 12,
+      workspaceId: "ws-1",
+      userId: null,
+      clientIp: "10.0.0.1",
+      userAgent: "Mozilla/5.0 (Test)",
+      pathPattern: "/workspaces/:workspaceId/content/:type",
+      actorType: "api_key",
+      apiKeyId: "11111111-2222-3333-4444-555555555555",
+      keyPrefix: "ab12cd34",
+    };
+
+    it("should send actorType, apiKeyId, keyPrefix on the wire payload", async () => {
+      service.trackHttpRequest(apiKeyInput);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      const [, options] = mockFetch.mock.calls[0]!;
+      const body = JSON.parse(options.body);
+      const event = body.payload.metadata;
+
+      expect(event.actorType).toBe("api_key");
+      expect(event.apiKeyId).toBe("11111111-2222-3333-4444-555555555555");
+      expect(event.keyPrefix).toBe("ab12cd34");
+    });
+
+    it("should send the route actionKey on the wire payload", async () => {
+      service.trackHttpRequest(apiKeyInput);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      const [, options] = mockFetch.mock.calls[0]!;
+      const body = JSON.parse(options.body);
+      const event = body.payload.metadata;
+
+      expect(event.actionKey).toBe("cms.content.listPublished");
+    });
+
+    it("should NEVER forward the raw API key on the wire payload", async () => {
+      const rawKey =
+        "xynes_live_ab12cd34deadbeefcafebabe1234567890abcdef1234567890abcdef12345678";
+
+      service.trackHttpRequest({
+        ...apiKeyInput,
+        userAgent: `${rawKey} agent`,
+      });
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      const [, options] = mockFetch.mock.calls[0]!;
+      // Headers MUST NOT contain Authorization or X-XS-API-Key
+      const headers = options.headers as Headers;
+      expect(headers.has("Authorization")).toBe(false);
+      expect(headers.has("X-XS-API-Key")).toBe(false);
+      expect(headers.has("x-xs-api-key")).toBe(false);
+
+      // Body MUST NOT contain the raw key in any field
+      const bodyStr = options.body as string;
+      expect(bodyStr).not.toContain(rawKey);
+      expect(bodyStr).not.toContain("xynes_live_");
+    });
+
+    it("should NEVER set X-XS-User-Id when actor is an API key", async () => {
+      service.trackHttpRequest(apiKeyInput);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      const [, options] = mockFetch.mock.calls[0]!;
+      const headers = options.headers as Headers;
+      expect(headers.has("X-XS-User-Id")).toBe(false);
+      // Workspace context still required for telemetry routing
+      expect(headers.get("X-Workspace-Id")).toBe("ws-1");
+    });
+
+    it("should record a denied request (403) with actionKey, statusCode and errorCode", async () => {
+      service.trackHttpRequest({
+        ...apiKeyInput,
+        statusCode: 403,
+        errorCode: "FORBIDDEN_SCOPE_MISS",
+      });
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      const [, options] = mockFetch.mock.calls[0]!;
+      const body = JSON.parse(options.body);
+      const event = body.payload.metadata;
+
+      expect(event.statusCode).toBe(403);
+      expect(event.actionKey).toBe("cms.content.listPublished");
+      expect(event.actorType).toBe("api_key");
+      expect(event.apiKeyId).toBe(apiKeyInput.apiKeyId);
+      expect(event.keyPrefix).toBe(apiKeyInput.keyPrefix);
+      expect(event.meta.errorCode).toBe("FORBIDDEN_SCOPE_MISS");
+    });
+
+    it("should record a 401 invalid-API-key denial without inventing actor identity", async () => {
+      service.trackHttpRequest({
+        method: "GET",
+        path: "/workspaces/ws-1/content/blog",
+        statusCode: 401,
+        durationMs: 3,
+        workspaceId: "ws-1",
+        actionKey: "cms.content.listPublished",
+        errorCode: "UNAUTHORIZED",
+      });
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      const [, options] = mockFetch.mock.calls[0]!;
+      const body = JSON.parse(options.body);
+      const event = body.payload.metadata;
+
+      expect(event.statusCode).toBe(401);
+      expect(event.actorType).toBe("anonymous");
+      expect(event.apiKeyId).toBeNull();
+      expect(event.keyPrefix).toBeNull();
+      expect(event.userId).toBeNull();
+      expect(event.actionKey).toBe("cms.content.listPublished");
+      expect(event.meta.errorCode).toBe("UNAUTHORIZED");
     });
   });
 });

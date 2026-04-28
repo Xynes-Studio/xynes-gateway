@@ -28,6 +28,7 @@ import {
   extractApiKeyCredential,
   MAX_RAW_API_KEY_LENGTH,
   RAW_API_KEY_MARKER,
+  requestHasApiKeyShape,
   resolveApiKeyCredential,
   type ResolvedWorkspaceApiKey,
   type WorkspaceApiKeyRepository,
@@ -475,5 +476,146 @@ describe("resolveApiKeyCredential", () => {
     const result = await resolveApiKeyCredential(headers, repo);
 
     expect(result).toEqual(resolved);
+  });
+});
+
+describe("requestHasApiKeyShape (shared structural-shape probe)", () => {
+  // The 64-hex-char canonical secret used for happy-path assertions.
+  const VALID_HEX_64 =
+    "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef";
+
+  it("returns true for Authorization: Bearer xynes_live_<64 hex>", () => {
+    const headers = new Headers({
+      Authorization: `Bearer xynes_live_${VALID_HEX_64}`,
+    });
+    expect(requestHasApiKeyShape(headers)).toBe(true);
+  });
+
+  it("returns true for X-XS-API-Key: xynes_live_<64 hex>", () => {
+    const headers = new Headers({
+      "X-XS-API-Key": `xynes_live_${VALID_HEX_64}`,
+    });
+    expect(requestHasApiKeyShape(headers)).toBe(true);
+  });
+
+  it("returns false when no API-key headers are present", () => {
+    expect(requestHasApiKeyShape(new Headers())).toBe(false);
+  });
+
+  it("returns false for a JWT-shaped Authorization header", () => {
+    const headers = new Headers({
+      Authorization: "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.payload.sig",
+    });
+    expect(requestHasApiKeyShape(headers)).toBe(false);
+  });
+
+  it("returns false for a TRUNCATED xynes_live_ value (32 hex chars)", () => {
+    const headers = new Headers({
+      Authorization: "Bearer xynes_live_deadbeefdeadbeefdeadbeefdeadbeef",
+    });
+    expect(requestHasApiKeyShape(headers)).toBe(false);
+  });
+
+  it("returns false for non-hex padding after the marker", () => {
+    const headers = new Headers({
+      "X-XS-API-Key": `xynes_live_${"z".repeat(64)}`,
+    });
+    expect(requestHasApiKeyShape(headers)).toBe(false);
+  });
+
+  it("returns false for stale `unset` sentinel from misconfigured proxies", () => {
+    const headers = new Headers({ "X-XS-API-Key": "unset" });
+    expect(requestHasApiKeyShape(headers)).toBe(false);
+  });
+
+  it("returns false when extra junk is appended to a valid key", () => {
+    const headers = new Headers({
+      Authorization: `Bearer xynes_live_${VALID_HEX_64}TRAILING`,
+    });
+    expect(requestHasApiKeyShape(headers)).toBe(false);
+  });
+
+  it("returns false when the marker itself is wrong", () => {
+    const headers = new Headers({
+      Authorization: `Bearer xynes_test_${VALID_HEX_64}`,
+    });
+    expect(requestHasApiKeyShape(headers)).toBe(false);
+  });
+
+  // Strictness contract (CodeRabbit alignment fix): the probe MUST be
+  // byte-for-byte aligned with parseRawKey, which is case-sensitive on
+  // both the marker and the hex secret.
+
+  it("returns false for an UPPERCASE marker (parseRawKey is case-sensitive)", () => {
+    // parseRawKey checks `rawKey.startsWith(RAW_API_KEY_MARKER)` where the
+    // marker is the lowercase string "xynes_live_". Accepting uppercase
+    // here would emit anonymous-401 telemetry for traffic that the
+    // resolver itself classifies as JWT (or garbage).
+    const headers = new Headers({
+      Authorization: `Bearer XYNES_LIVE_${VALID_HEX_64}`,
+    });
+    expect(requestHasApiKeyShape(headers)).toBe(false);
+  });
+
+  it("returns false for an UPPERCASE-hex secret (HEX_RE is /^[0-9a-f]+$/)", () => {
+    // parseRawKey rejects DEADBEEF... — same constraint must apply here
+    // so the probe never says "yes" for inputs the resolver rejects.
+    const headers = new Headers({
+      "X-XS-API-Key": `xynes_live_${VALID_HEX_64.toUpperCase()}`,
+    });
+    expect(requestHasApiKeyShape(headers)).toBe(false);
+  });
+
+  it("returns false for an Authorization header with leading whitespace before Bearer", () => {
+    // readAuthorizationHeader uses BEARER_RE which matches `bearer\s+...`
+    // after value.trim(). A leading space ON THE VALUE would be trimmed
+    // by readAuthorizationHeader, so it still matches — that's fine. But
+    // padding the key itself between Bearer and the marker is rejected.
+    const headers = new Headers({
+      Authorization: `Bearer  xynes_live_${VALID_HEX_64}`, // 2 spaces -> token starts after both, still valid per BEARER_RE
+    });
+    // BEARER_RE = /^bearer\s+(\S+)\s*$/i splits on \s+, so the captured
+    // token is `xynes_live_<hex>` and parseRawKey accepts it.
+    expect(requestHasApiKeyShape(headers)).toBe(true);
+  });
+
+  it("returns false for an oversized Authorization header (DoS guard)", () => {
+    // readAuthorizationHeader enforces value.length > MAX_RAW_API_KEY_LENGTH + 32
+    // before any regex / parse work — same bound must apply here so a
+    // 10MB Authorization header doesn't trigger expensive parsing.
+    const huge = "x".repeat(MAX_RAW_API_KEY_LENGTH + 100);
+    const headers = new Headers({ Authorization: `Bearer ${huge}` });
+    expect(requestHasApiKeyShape(headers)).toBe(false);
+  });
+
+  it("returns false for an oversized X-XS-API-Key header (DoS guard)", () => {
+    const huge = "x".repeat(MAX_RAW_API_KEY_LENGTH + 100);
+    const headers = new Headers({ "X-XS-API-Key": huge });
+    expect(requestHasApiKeyShape(headers)).toBe(false);
+  });
+
+  it("contract: probe and extractApiKeyCredential agree on a valid key", () => {
+    const headers = new Headers({
+      Authorization: `Bearer xynes_live_${VALID_HEX_64}`,
+    });
+    const extracted = extractApiKeyCredential(headers);
+    expect(requestHasApiKeyShape(headers)).toBe(true);
+    expect(extracted).not.toBeNull();
+  });
+
+  it("contract: probe rejects what extractApiKeyCredential rejects (uppercase marker)", () => {
+    const headers = new Headers({
+      Authorization: `Bearer XYNES_LIVE_${VALID_HEX_64}`,
+    });
+    expect(requestHasApiKeyShape(headers)).toBe(false);
+    expect(extractApiKeyCredential(headers)).toBeNull();
+  });
+
+  it("contract: probe rejects what extractApiKeyCredential rejects (uppercase hex)", () => {
+    const headers = new Headers({
+      "X-XS-API-Key": `xynes_live_${VALID_HEX_64.toUpperCase()}`,
+    });
+    expect(requestHasApiKeyShape(headers)).toBe(false);
+    expect(extractApiKeyCredential(headers)).toBeNull();
   });
 });

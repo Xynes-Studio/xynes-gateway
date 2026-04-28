@@ -588,6 +588,205 @@ flipped on once the backend foundation publishes the
   — Task 6.
 - End-to-end smoke against a live key — Task 7.
 
+## Workspace API Key Telemetry (WORKSPACE-ADMIN-INTEGRATIONS, Task 5)
+
+The gateway telemetry payload (`HttpRequestTelemetryEvent` from
+`src/telemetry/types.ts`) now carries the actor surface needed to audit
+workspace API key usage end-to-end. Source files:
+
+- `src/telemetry/types.ts` — canonical event + `TelemetryActorType` union
+  + `RAW_API_KEY_REDACTION_PATTERN` + extended `FORBIDDEN_TELEMETRY_FIELDS`.
+- `src/telemetry/sanitize.ts` — `HttpRequestTelemetryInput` extended with
+  `actorType` / `apiKeyId` / `keyPrefix`; the builder enforces actor
+  consistency and raw-key redaction.
+- `src/telemetry/service.ts` — `GatewayTelemetryService.trackHttpRequest`
+  forwards `X-Workspace-Id` / `X-XS-User-Id` from the **sanitized**
+  event so an API-key actor never leaks a user header to the
+  telemetry-service ingest endpoint.
+- Tests: `src/telemetry/sanitize.test.ts` (+11 actor tests),
+  `src/telemetry/service.test.ts` (+6 wire-payload tests).
+
+### Canonical event surface
+
+```ts
+type TelemetryActorType = "user" | "api_key" | "anonymous";
+
+interface HttpRequestTelemetryEvent {
+  // ... existing fields (type, routeId, serviceKey, actionKey, method,
+  // path, statusCode, durationMs, workspaceId, clientIpHash, timestamp,
+  // meta) ...
+  actorType: TelemetryActorType;
+  userId: string | null;       // set only when actorType === "user"
+  apiKeyId: string | null;     // set only when actorType === "api_key"
+  keyPrefix: string | null;    // set only when actorType === "api_key"
+}
+```
+
+### Actor resolution
+
+`buildHttpRequestTelemetryEvent` honours an explicit `input.actorType`,
+otherwise it infers: `apiKeyId` → `api_key`, else `userId` → `user`,
+else `anonymous`. **Mismatched id fields are dropped** at the builder
+boundary so callers cannot accidentally cross-contaminate identities:
+
+| Input                                                        | Resulting event                                            |
+| ------------------------------------------------------------ | ---------------------------------------------------------- |
+| `actorType: "user"`, `userId: "u-1"`                         | `userId: "u-1"`, `apiKeyId: null`, `keyPrefix: null`       |
+| `actorType: "user"`, `userId: "u-1"`, `apiKeyId: "k-1"`      | `userId: "u-1"`, `apiKeyId: null`, `keyPrefix: null`       |
+| `actorType: "api_key"`, `apiKeyId: "k-1"`, `keyPrefix: "ab"` | `userId: null`, `apiKeyId: "k-1"`, `keyPrefix: "ab"`       |
+| `actorType: "api_key"`, `apiKeyId: "k-1"`, `userId: "u-1"`   | `userId: null`, `apiKeyId: "k-1"`, `keyPrefix: null`       |
+| (none of the above) `userId: "u-1"`                          | `actorType: "user"`, `userId: "u-1"`                       |
+| (none) `apiKeyId: "k-1"`, `keyPrefix: "ab"`                  | `actorType: "api_key"`, `apiKeyId: "k-1"`, `keyPrefix: "ab"` |
+| (truly empty)                                                | `actorType: "anonymous"`, all id fields `null`             |
+
+### Security invariants
+
+- **No raw API key** ever reaches the telemetry-service. `Authorization`
+  / `X-XS-API-Key` are NOT forwarded as outbound headers, and the body
+  is built from the sanitized event (which has no raw-key field on its
+  type contract). A user-controlled `userAgent` containing a raw key
+  (`xynes_live_*`) is redacted via `RAW_API_KEY_REDACTION_PATTERN`
+  before it lands on `meta.userAgent`. This is defense-in-depth — the
+  gateway pipeline must never put a raw key on a telemetry input on
+  purpose.
+- **No stored hash** ever reaches telemetry. `FORBIDDEN_TELEMETRY_FIELDS`
+  now includes `keyhash` / `key_hash` / `rawkey` / `raw_key` /
+  `x-xs-api-key` (in addition to the existing `authorization` /
+  `cookie` / `x-internal-service-token` / `x-api-key` / `query` /
+  `body` / `rawBody`).
+- **Anonymous denials never invent an actor.** A 401 invalid-API-key
+  rejection is recorded with `actorType: "anonymous"` and all id
+  fields `null`, even if the request presented a structurally valid
+  `xynes_live_*` value — we never log the prefix of an unknown key as
+  if it were a resolved actor.
+- **Outbound header gating** uses the sanitized event:
+  `sendTelemetry(actionPayload, event.workspaceId, event.userId)`.
+  Because the builder nulls `event.userId` for non-user actors,
+  `X-XS-User-Id` is only set when `actorType === "user"`. For an API
+  key actor, only `X-Workspace-Id`, `X-Internal-Service-Token`, and
+  `X-Request-Id` are forwarded.
+
+### Denied request semantics
+
+The telemetry call site in the request-finished pipeline (which
+existing GatewayTelemetryService consumers will populate as part of
+the wider rollout) should always pass:
+
+- the route's `actionKey` (preserved from the matched route),
+- the final `statusCode`,
+- a stable `errorCode` for denials,
+
+so that security ops can audit which key tried which action. The
+canonical denial payloads, **as emitted by the runtime today** (codes
+come from `DynamicRouter.authorize` and flow through
+`gatewayErrorCode`):
+
+| Outcome                          | actorType   | apiKeyId   | keyPrefix  | userId | statusCode | meta.errorCode      |
+| -------------------------------- | ----------- | ---------- | ---------- | ------ | ---------- | ------------------- |
+| API-key scope miss               | `api_key`   | resolved   | resolved   | `null` | 403        | `FORBIDDEN`         |
+| API-key workspace mismatch       | `api_key`   | resolved   | resolved   | `null` | 403        | `FORBIDDEN`         |
+| Invalid / revoked / expired key  | `anonymous` | `null`     | `null`     | `null` | 401        | `UNAUTHORIZED`      |
+| Conflicting headers              | `anonymous` | `null`     | `null`     | `null` | 400        | `INVALID_API_KEY`   |
+| User JWT auth (existing path)    | `user`      | `null`     | `null`     | userId | 2xx/4xx    | (as today)          |
+
+> **Note (follow-up):** `FORBIDDEN` is currently shared between
+> "scope miss" and "workspace mismatch". A finer-grained mapping
+> (`FORBIDDEN_SCOPE_MISS` / `WORKSPACE_MISMATCH`) would let security
+> ops filter on the exact failure mode without correlating with the
+> downstream message string. That mapping work is deferred — it
+> requires extending `DynamicRouter.authorize`'s return shape and
+> the `gatewayErrorCode` pipeline together; tracked as a follow-up
+> story so this PR doesn't churn the public error-code surface
+> without explicit approval.
+
+### `actionKey` contract (Risk 4)
+
+`HttpRequestTelemetryInput.actionKey` is **required** (`string | null`),
+NOT optional. The `null` value is the explicit "no route matched" /
+"public route without action contract" signal (e.g. `/health`, `/ready`,
+static routes).
+
+Why: callers used to be able to omit `actionKey` and silently drop the
+action context on denial paths (401 invalid-API-key, 403 scope-miss),
+which is exactly the data security ops needs to audit denied requests.
+Making the field required forces every call site to make a deliberate
+decision per route, even when the request is rejected before
+`authorize()` runs.
+
+This is a contract-tightening change with no backwards-compatibility
+concern because there were no production call sites at the time it
+landed (the only callers were the telemetry module's own tests).
+
+### Wiring posture (Risk 1)
+
+The middleware in `src/logging/middleware.ts` (registered globally as
+`app.use("*", gatewayLoggingMiddleware)` in `app.ts`) now emits API-key
+telemetry alongside the existing access-log dispatch. The wiring is
+deliberately **scoped to API-key requests**:
+
+```text
+shouldEmitApiKeyTelemetry(c, routeMeta, statusCode):
+  if request.auth.actor is ApiKeyActor → emit
+  if request.auth.actor is UserActor   → SKIP (covered by access-log path)
+  if route did not match (no routeId)  → SKIP
+  if statusCode === 400 AND gatewayErrorCode === "INVALID_API_KEY"
+     → emit (anonymous, conflicting headers)
+  if statusCode === 401 AND request presented an API-key-shaped header
+     → emit (anonymous, invalid/revoked/expired key)
+  else → SKIP
+```
+
+The header-shape probe (`requestHasApiKeyShape`, exported from
+`src/security/apiKeyAuth.ts`) is byte-for-byte aligned with
+`extractApiKeyCredential` / `parseRawKey`: it accepts only
+`xynes_live_<64 lowercase hex>` with no leading/trailing junk, and
+applies the same DoS length cap on header values BEFORE any parsing.
+The raw key value is never returned, logged, or stored — the probe only
+confirms shape, never identity. This gives security ops the audit trail
+for attempted-but-rejected workspace API key usage that the previous
+"actor-attached only" wiring would have silently dropped.
+
+Independence from `GATEWAY_AUDIT_ENABLED`: API-key telemetry runs even
+when the access-log dispatch is disabled (`GATEWAY_AUDIT_ENABLED=false`).
+Telemetry and access-logs are independent observability channels;
+disabling one must NOT silence the other. Verified by
+`src/logging/middleware.test.ts → "should emit telemetry even when
+access-log dispatch is disabled"`.
+
+Fire-and-forget: a thrown `trackHttpRequest` is swallowed at the
+middleware boundary (logged via `console.error`, never bubbled up). The
+service itself is also fire-and-forget internally. Verified by
+`src/logging/middleware.test.ts → "should swallow telemetry errors and
+not fail the request"`.
+
+DI-friendly: `createGatewayLoggingMiddleware(dispatcher, telemetry)`
+accepts an `IGatewayTelemetryService` for tests. The default factory
+uses the singleton `gatewayTelemetryService`.
+
+### `actionKey` on denied requests
+
+The middleware reads `actionKey` from `c.get("gatewayRouteMeta")` (set
+by `dynamicRouter.setRouteMeta()` BEFORE `authorize()` runs). This means
+denied requests retain the matched-route action context:
+
+| Request outcome                    | `actionKey` source                      |
+| ---------------------------------- | --------------------------------------- |
+| 200 / 2xx success                  | matched route                           |
+| 401 invalid-API-key (anonymous)    | matched route (set pre-auth)            |
+| 403 scope-miss (api_key actor)     | matched route                           |
+| 403 workspace mismatch             | matched route                           |
+| 404 route not matched              | `null` (and telemetry is NOT emitted)   |
+| 400 conflicting headers            | matched route if found, else `null`     |
+
+### Out of scope (deferred)
+
+- JWT-actor telemetry emission (currently routed through the broader
+  access-log path; an equivalent `trackHttpRequest` emission for user
+  actors will land alongside the broader observability rollout).
+- Redaction rules for `x-xs-api-key`, `apiKey`, `rawKey`, `key_hash`
+  in request/response snippets (`src/logging/redaction.ts`) — Task 6.
+- End-to-end smoke against a live key — Task 7.
+
 ## Gateway Access Logging (GATEWAY-AUDIT-1)
 
 The gateway is the canonical capture point for all request outcomes: success, auth failures, upstream failures, rate-limit rejections, unmatched paths, and static routes.
