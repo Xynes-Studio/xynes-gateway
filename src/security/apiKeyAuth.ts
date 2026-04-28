@@ -209,3 +209,108 @@ export function extractApiKeyCredential(
 
   return parseRawKey(candidate);
 }
+
+// ── Task 2: Repository contract + resolver ──────────────────────
+
+/**
+ * Resolved view of a workspace API key after the repository has confirmed
+ * the prefix exists, the stored hash matches the presented raw key, and
+ * the key is currently active (not revoked / not expired).
+ *
+ * NOTE: This shape MUST NOT include the raw key, the stored hash, or any
+ * other secret material — it is forwarded into request context, telemetry,
+ * and (eventually) downstream service headers.
+ */
+export interface ResolvedWorkspaceApiKey {
+  readonly apiKeyId: string;
+  readonly workspaceId: string;
+  readonly keyPrefix: string;
+  /** Action keys granted to this credential (may be empty). */
+  readonly scopes: readonly string[];
+}
+
+/**
+ * Storage abstraction used by {@link resolveApiKeyCredential}.
+ *
+ * Implementations are responsible for ALL of:
+ *   - Looking up the API key row by its non-secret prefix.
+ *   - Verifying the presented raw key against the stored Argon2id hash
+ *     using a timing-safe comparison (`Bun.password.verify`).
+ *   - Filtering out revoked or expired keys (status / expires_at gating).
+ *   - Loading the associated action-key scopes.
+ *
+ * Returning `null` always means "this key is not valid right now". The
+ * implementation MUST NOT distinguish between "prefix unknown", "hash
+ * mismatch", "revoked", or "expired" in the return value — that
+ * distinction would be a privacy leak. Internal logging is fine.
+ */
+export interface WorkspaceApiKeyRepository {
+  /**
+   * Resolve a presented raw key to its `ResolvedWorkspaceApiKey`, or
+   * `null` if no usable key matches.
+   *
+   * @param rawKey   The raw API key as presented by the caller. MUST be
+   *                 forwarded only to a hash-verification call and never
+   *                 logged or persisted.
+   * @param keyPrefix The non-secret indexed lookup prefix derived from
+   *                  the raw key (see {@link API_KEY_LOOKUP_PREFIX_LENGTH}).
+   */
+  resolveByRawKey(
+    rawKey: string,
+    keyPrefix: string,
+  ): Promise<ResolvedWorkspaceApiKey | null>;
+
+  /**
+   * Record the timestamp at which a key was last used. Implementations
+   * SHOULD treat this as best-effort and SHOULD NOT throw to callers; the
+   * resolver also swallows errors defensively so a transient write
+   * failure cannot lock out a valid key.
+   */
+  markLastUsed(apiKeyId: string, usedAt: Date): Promise<void>;
+}
+
+/**
+ * High-level resolver: read headers, look up the key, return the
+ * resolved identity (or null).
+ *
+ * Resolution order:
+ *   1. {@link extractApiKeyCredential} — parses headers; throws
+ *      {@link ApiKeyCredentialError} on conflicting headers (re-thrown
+ *      here so the request handler can map it to a 400-class response).
+ *   2. If no API key credential is present, return null. The next auth
+ *      layer (e.g. JWT) is free to handle the request.
+ *   3. Call `repository.resolveByRawKey`. On a hit, fire-and-forget
+ *      `markLastUsed`. On any miss, return null.
+ *
+ * Security invariants:
+ *   - The raw key is passed ONLY to {@link WorkspaceApiKeyRepository}.
+ *     It is never returned, logged, embedded in errors, or attached to
+ *     the resolved object.
+ *   - Repository errors are propagated, but the raw key cannot leak
+ *     because we never embed it in any error this module constructs.
+ *   - `markLastUsed` failures are swallowed so a transient audit-write
+ *     failure cannot deny access to an otherwise-valid key.
+ */
+export async function resolveApiKeyCredential(
+  headers: Headers,
+  repository: WorkspaceApiKeyRepository,
+): Promise<ResolvedWorkspaceApiKey | null> {
+  // Step 1: extract — re-throws ApiKeyCredentialError on conflict.
+  const credential = extractApiKeyCredential(headers);
+  if (credential === null) return null;
+
+  // Step 2: look up. If lookup throws, propagate — the raw key is not in
+  // any error we emit, so it cannot leak through this path.
+  const resolved = await repository.resolveByRawKey(
+    credential.rawKey,
+    credential.keyPrefix,
+  );
+  if (resolved === null) return null;
+
+  // Step 3: best-effort last-used tracking. Never block auth on this.
+  void repository
+    .markLastUsed(resolved.apiKeyId, new Date())
+    .catch(() => undefined);
+
+  return resolved;
+}
