@@ -279,7 +279,6 @@ describe("extractApiKeyCredential", () => {
       expect(credential?.keyPrefix.startsWith("xynes_")).toBe(false);
     });
   });
-
 });
 
 // ──────────────────────────────────────────────────────────────────────────

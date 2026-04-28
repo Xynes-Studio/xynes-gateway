@@ -112,6 +112,43 @@ async function defaultVerifyHash(
   }
 }
 
+// ── Connection helper ───────────────────────────────────────────
+
+/**
+ * Open a short-lived postgres-js client, run `work`, and ALWAYS close
+ * the connection afterwards (even on throw). Centralising the
+ * connection options and try/finally lifecycle keeps the two default
+ * builders below from drifting out of sync as connection tuning
+ * evolves.
+ *
+ * SECURITY: errors thrown by `work` propagate, but the helper itself
+ * never embeds query payloads / bound parameters in any error it adds.
+ *
+ * NOTE: the connection options here intentionally mirror the existing
+ * `postgresRouteRepository.ts` settings. A workspace-wide refactor to
+ * a single shared helper is out of scope for this story (it would
+ * touch unrelated production paths in `infra/db.ts`,
+ * `bodyLimitSetup.ts`, and `rateLimitSetup.ts`).
+ */
+async function withPostgresClient<T>(
+  databaseUrl: string,
+  work: (sql: ReturnType<typeof import("postgres").default>) => Promise<T>,
+): Promise<T> {
+  const { default: postgres } = await import("postgres");
+  const sql = postgres(databaseUrl, {
+    max: 1,
+    prepare: false,
+    connect_timeout: 5,
+    idle_timeout: 2,
+    onnotice: () => {},
+  });
+  try {
+    return await work(sql);
+  } finally {
+    await sql.end({ timeout: 2 }).catch(() => undefined);
+  }
+}
+
 // ── Default Postgres lookup ─────────────────────────────────────
 
 /**
@@ -139,17 +176,7 @@ function buildDefaultFetchRowByPrefix(
       );
     }
 
-    let sql: ReturnType<typeof import("postgres").default> | null = null;
-    try {
-      const { default: postgres } = await import("postgres");
-      sql = postgres(databaseUrl, {
-        max: 1,
-        prepare: false,
-        connect_timeout: 5,
-        idle_timeout: 2,
-        onnotice: () => {},
-      });
-
+    return withPostgresClient(databaseUrl, async (sql) => {
       // Single-row lookup with a left join to scopes aggregated as an
       // array. Using `coalesce(... , '{}')` ensures `scopes` is always
       // a real array (never null) regardless of whether scope rows exist.
@@ -195,11 +222,7 @@ function buildDefaultFetchRowByPrefix(
         expires_at: row.expires_at,
         scopes: row.scopes ?? [],
       };
-    } finally {
-      if (sql) {
-        await sql.end({ timeout: 2 }).catch(() => undefined);
-      }
-    }
+    });
   };
 }
 
@@ -219,35 +242,19 @@ function buildDefaultUpdateLastUsed(
       return;
     }
 
-    let sql: ReturnType<typeof import("postgres").default> | null = null;
-    try {
-      const { default: postgres } = await import("postgres");
-      sql = postgres(databaseUrl, {
-        max: 1,
-        prepare: false,
-        connect_timeout: 5,
-        idle_timeout: 2,
-        onnotice: () => {},
-      });
-
+    await withPostgresClient(databaseUrl, async (sql) => {
       await sql`
         UPDATE platform.workspace_api_keys
         SET last_used_at = ${usedAt}
         WHERE id = ${apiKeyId}
       `;
-    } finally {
-      if (sql) {
-        await sql.end({ timeout: 2 }).catch(() => undefined);
-      }
-    }
+    });
   };
 }
 
 // ── Repository ──────────────────────────────────────────────────
 
-export class PostgresWorkspaceApiKeyRepository
-  implements WorkspaceApiKeyRepository
-{
+export class PostgresWorkspaceApiKeyRepository implements WorkspaceApiKeyRepository {
   private readonly fetchRowByPrefix: (
     keyPrefix: string,
   ) => Promise<WorkspaceApiKeyRow | null>;
@@ -266,8 +273,7 @@ export class PostgresWorkspaceApiKeyRepository
       buildDefaultFetchRowByPrefix(options.databaseUrl);
     this.verifyHash = options.verifyHash ?? defaultVerifyHash;
     this.updateLastUsed =
-      options.updateLastUsed ??
-      buildDefaultUpdateLastUsed(options.databaseUrl);
+      options.updateLastUsed ?? buildDefaultUpdateLastUsed(options.databaseUrl);
   }
 
   public async resolveByRawKey(

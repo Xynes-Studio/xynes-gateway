@@ -78,9 +78,8 @@ const fakePostgres: PostgresFactory = (databaseUrl) => {
 
 vi.module("postgres", () => ({ default: fakePostgres }));
 
-const { PostgresWorkspaceApiKeyRepository } = await import(
-  "./postgresWorkspaceApiKeyRepository"
-);
+const { PostgresWorkspaceApiKeyRepository } =
+  await import("./postgresWorkspaceApiKeyRepository");
 
 const STORED_HASH = "$argon2id$v=19$m=19456,t=2,p=1$saltsalt$hash";
 
@@ -234,9 +233,7 @@ describe("PostgresWorkspaceApiKeyRepository — default builders (postgres mock)
       const queries = queriesByUrl.get(url) ?? [];
       expect(queries).toHaveLength(1);
       const [query] = queries;
-      expect(query?.text).toContain(
-        "UPDATE platform.workspace_api_keys",
-      );
+      expect(query?.text).toContain("UPDATE platform.workspace_api_keys");
       expect(query?.text).toContain("last_used_at");
       // SECURITY: id and timestamp are parameters, never interpolated.
       expect(query?.values).toEqual([

@@ -298,15 +298,58 @@ schema is owned by
 - Verifier exceptions (e.g. malformed stored hash) resolve to `null`, so
   one corrupt row cannot crash the gateway.
 
+### Folder structure & layering
+
+This task deliberately mirrors the pre-existing routing-data pattern in
+`src/data/postgresRouteRepository.ts`, so future tasks can copy the
+shape without re-deriving the convention:
+
+- **Contract & high-level resolver** live in
+  `src/security/apiKeyAuth.ts`. This is the only module the request
+  pipeline imports — it owns the `WorkspaceApiKeyRepository` interface,
+  the `ResolvedWorkspaceApiKey` shape, and `resolveApiKeyCredential`.
+- **Concrete database implementation** lives in `src/data/`,
+  alongside `postgresRouteRepository.ts`. It depends *down* on
+  `src/security/apiKeyAuth.ts` for the contract types — never the
+  reverse.
+- **Tests live next to their source** (`*.test.ts`) — the same
+  convention used everywhere else in the gateway. Behavior tests use
+  injected seams; SQL plumbing is exercised separately via the
+  `vi.module("postgres", …)` mock pattern from
+  `src/infra/db.test.ts`.
+
+There is intentionally no `src/security/index.ts` or `src/data/index.ts`
+barrel — the gateway imports concrete files directly, matching every
+other module in this service.
+
+### Connection helper (`withPostgresClient`)
+
+The two default builders (`buildDefaultFetchRowByPrefix` and
+`buildDefaultUpdateLastUsed`) share a tiny private helper,
+`withPostgresClient`, which centralises the postgres-js connection
+options (`max: 1`, `prepare: false`, `connect_timeout: 5`,
+`idle_timeout: 2`) and the `try { … } finally { sql.end(...) }` lifecycle.
+This eliminates in-file duplication and makes future tasks easier — when
+Tasks 3+ add more SQL paths they can copy the helper rather than
+inlining yet another `postgres(databaseUrl, { … })` block.
+
+A workspace-wide consolidation that would dedupe the same options block
+across `postgresRouteRepository.ts`, `infra/db.ts`,
+`infra/bodyLimitSetup.ts`, and `infra/rateLimitSetup.ts` is
+**deliberately out of scope** for this story — that change would touch
+unrelated production paths. It is logged as future tech-debt cleanup.
+
 ### Coverage
 
 `bun run coverage` reports:
 
 - `src/security/apiKeyAuth.ts`: 100% functions / 100% lines.
-- `src/data/postgresWorkspaceApiKeyRepository.ts`: 92.79% lines (the
-  uncovered range is the real `Bun.password.verify` Argon2id call which
-  is intentionally swapped via the `verifyHash` seam in tests).
-- Gateway overall: 93.65% functions / 91.48% lines, well above the
+- `src/data/postgresWorkspaceApiKeyRepository.ts`: 85% functions /
+  92.16% lines. The uncovered range (`defaultVerifyHash`) is the real
+  `Bun.password.verify` Argon2id call which is intentionally swapped
+  via the `verifyHash` seam in tests so unit runs stay fast and
+  deterministic.
+- Gateway overall: 93.92% functions / 91.47% lines, well above the
   ADR-001 80% floor.
 
 ### Out of scope for Task 2
