@@ -1,4 +1,3 @@
-
 # Xynes Gateway Developer Guide
 
 ## Architecture
@@ -103,6 +102,96 @@ We follow the platform test pyramid described in `../xynes-cms-core/docs/adr/001
    ```bash
    bun run lint
    ```
+
+## Workspace API Key Resolver (WORKSPACE-ADMIN-INTEGRATIONS, Task 1)
+
+The gateway is the public edge for workspace API keys (see the
+[Workspace Admin Integrations epic](../xynes-infra/infra/architecture/epics/workspace-admin-integrations.md)
+and the
+[gateway API key enforcement plan](../xynes-infra/docs/plans/2026-04-24-workspace-admin-integrations-gateway-api-key-enforcement.md)).
+
+Task 1 ships a narrow, side-effect-free credential extractor used by later
+authentication and scope-enforcement layers.
+
+### Module
+
+- Source: `src/security/apiKeyAuth.ts`
+- Tests: `src/security/apiKeyAuth.test.ts`
+
+### Public surface
+
+```ts
+import {
+  extractApiKeyCredential,
+  ApiKeyCredentialError,
+  RAW_API_KEY_MARKER,
+} from "./security/apiKeyAuth";
+
+const credential = extractApiKeyCredential(req.headers);
+// → { rawKey, keyPrefix } | null
+// → throws ApiKeyCredentialError on conflicting headers
+```
+
+### Header resolution rules
+
+| Inbound header                        | Behavior                                                                 |
+| ------------------------------------- | ------------------------------------------------------------------------ |
+| `Authorization: Bearer xynes_live_…`  | Treated as an API key.                                                   |
+| `Authorization: Bearer eyJ…` (JWT)    | Ignored — falls through to the existing JWT auth path.                   |
+| `X-XS-API-Key: xynes_live_…`          | Treated as an API key.                                                   |
+| Both headers, equal values            | Accepted.                                                                |
+| Both headers, **different** values    | `ApiKeyCredentialError("conflicting_api_key_headers")` is thrown.        |
+| Neither header                        | Returns `null`.                                                          |
+
+### Key shape contract (must match accounts-service)
+
+The extractor mirrors the generator in
+`xynes-accounts-service/src/actions/handlers/integrations/apiKeyCrypto.ts`:
+
+- Raw key  : `xynes_live_<64 hex chars>` (32 random bytes, hex-encoded).
+- Prefix   : first 8 hex chars of the secret portion (excludes the
+  `xynes_live_` marker), used for indexed DB lookup.
+
+Malformed inputs (wrong marker, wrong length, non-hex characters) return
+`null` so the request can fall through to JWT auth instead of being
+rejected with a generic 401.
+
+### Security invariants
+
+- The raw key is never written to logs, error messages, or `error.details`.
+  Conflicting-header errors are safe to surface to clients verbatim.
+- `ApiKeyCredentialError` is a typed, discriminated error with code
+  `"conflicting_api_key_headers"` so callers can fail closed deterministically.
+- The marker check (`xynes_live_`) prevents user JWTs from being
+  mis-classified as API keys.
+- Credentials are returned `Object.freeze`-d to make accidental mutation
+  by upstream code impossible.
+- **DoS hardening**: header values longer than `MAX_RAW_API_KEY_LENGTH + 32`
+  bytes are rejected before any regex / substring work, so attacker-inflated
+  headers cannot waste CPU.
+- **Strict Bearer parsing**: the Bearer regex captures `\S+` (no internal
+  whitespace), and the structural check requires the candidate length to
+  match `MAX_RAW_API_KEY_LENGTH` exactly — trailing junk and value
+  smuggling are rejected.
+- **Caller responsibility — never `JSON.stringify` a credential.** `rawKey`
+  is an enumerable property by design (so the verification layer can read
+  it). Log redaction at the request boundary (Task 6 of the enforcement
+  plan) is the canonical defense; this module deliberately does not encode
+  field-level secrecy because that is a logging concern.
+
+### Coverage
+
+`bun run coverage` reports:
+
+- `src/security/apiKeyAuth.ts`: 100% functions / 100% lines.
+- Gateway overall: ≥ 80% (current run: 94.07% functions / 91.46% lines).
+
+### Out of scope for Task 1
+
+- DB lookup (`platform.workspace_api_keys`) — Task 2.
+- `GatewayRequestActor` discriminator — Task 3.
+- Scope enforcement in `dynamicRouter` — Task 4.
+- Telemetry / redaction extensions — Tasks 5–6.
 
 ## Gateway Access Logging (GATEWAY-AUDIT-1)
 
