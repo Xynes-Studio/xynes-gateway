@@ -15,6 +15,8 @@ import type { RequestAuth, ApiKeyActor } from "../types/requestAuth";
 import {
   resolveApiKeyCredential,
   ApiKeyCredentialError,
+  RAW_API_KEY_MARKER,
+  API_KEY_SECRET_HEX_LENGTH,
   type ResolvedWorkspaceApiKey,
   type WorkspaceApiKeyRepository,
 } from "../security/apiKeyAuth";
@@ -477,24 +479,48 @@ export class DynamicRouter {
   }
 
   /**
-   * Returns true iff the request carries headers that look like a workspace
-   * API key credential (regardless of structural validity). Used to fail
-   * closed when an API-key-shaped header is present but the resolver
-   * returned null (unknown/revoked/expired/hash-mismatch).
+   * Returns true iff the request carries headers that are STRUCTURALLY a
+   * workspace API key credential (i.e. would parse to a non-null
+   * `ApiKeyCredential` if presented to {@link extractApiKeyCredential}).
+   * Used to fail closed when an API-key-shaped header is present but the
+   * resolver returned null (unknown/revoked/expired/hash-mismatch).
+   *
+   * SECURITY: this MUST mirror the extractor's structural validation
+   * (see `parseRawKey` in `src/security/apiKeyAuth.ts`). If we treated
+   * any non-empty `X-XS-API-Key` or any `Bearer xynes_live_*` header as
+   * an API-key attempt, a client/proxy that accidentally forwarded a
+   * stale, truncated, or non-hex value would lock out otherwise valid
+   * JWT traffic with a 401 — a behavioural regression flagged on PR #31
+   * by both Codex and CodeRabbit. Malformed inputs MUST fall through to
+   * the JWT path because the resolver itself already returned null for
+   * them; only structurally-valid keys count as "attempted API-key auth".
    */
   private static requestPresentsApiKey(request: Request): boolean {
     const auth = request.headers.get("authorization");
     if (auth) {
-      // Cheap test — we don't need to be strict here; the resolver already
-      // rejected anything malformed. We only need to know "did the caller
-      // try to authenticate via a workspace API key".
       const trimmed = auth.trim();
-      if (/^bearer\s+xynes_live_/i.test(trimmed)) return true;
+      if (DynamicRouter.BEARER_API_KEY_RE.test(trimmed)) return true;
     }
     const xs = request.headers.get("x-xs-api-key");
-    if (xs && xs.trim().length > 0) return true;
+    if (xs && DynamicRouter.RAW_API_KEY_RE.test(xs.trim())) return true;
     return false;
   }
+
+  /**
+   * Structural API-key shape: `xynes_live_` + 64 lowercase hex chars,
+   * with no leading or trailing junk. Built from the same constants as
+   * the resolver's `parseRawKey` so the two stay in lockstep.
+   */
+  private static readonly RAW_API_KEY_RE = new RegExp(
+    `^${RAW_API_KEY_MARKER}[0-9a-f]{${API_KEY_SECRET_HEX_LENGTH}}$`,
+    "i",
+  );
+
+  /** Bearer-wrapped variant of {@link RAW_API_KEY_RE}. */
+  private static readonly BEARER_API_KEY_RE = new RegExp(
+    `^bearer\\s+${RAW_API_KEY_MARKER}[0-9a-f]{${API_KEY_SECRET_HEX_LENGTH}}$`,
+    "i",
+  );
 
   async authorize(
     match: RouteMatch,

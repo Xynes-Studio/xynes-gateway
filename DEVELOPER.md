@@ -554,9 +554,20 @@ flipped on once the backend foundation publishes the
 ### Security invariants
 
 - API-key-shaped credentials that fail to resolve produce **401 even on
-  public routes**. An attacker presenting a bad key cannot fall through
+  public routes**. An attacker presenting a structurally-valid but
+  unknown / revoked / expired / hash-mismatched key cannot fall through
   to a public endpoint as the resolved actor — `requestPresentsApiKey`
   forces a fail-closed outcome.
+- **Structural validation only.** `requestPresentsApiKey` mirrors the
+  resolver's `parseRawKey` shape (`xynes_live_` + 64 lowercase hex chars,
+  with no leading or trailing junk) using regexes built from the same
+  exported constants (`RAW_API_KEY_MARKER`, `API_KEY_SECRET_HEX_LENGTH`).
+  Malformed inputs (truncated strings, non-hex payloads, wrong markers,
+  stale `"unset"` values from misconfigured proxies) are NOT treated as
+  "attempted API-key auth" — they fall through to the JWT path so a
+  bogus header from a client/proxy cannot lock out otherwise valid JWT
+  traffic. This prevents the regression flagged on PR #31 by both Codex
+  and CodeRabbit.
 - `authzService.check` is NEVER invoked for an API key actor. The
   resolver's `ResolvedWorkspaceApiKey.scopes` array is the only source of
   truth for what the key can do.

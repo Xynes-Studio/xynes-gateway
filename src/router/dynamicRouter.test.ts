@@ -802,6 +802,131 @@ describe("DynamicRouter", () => {
       );
     });
 
+    // PR #31 review (Codex P1 + CodeRabbit Major): a structurally-invalid
+    // X-XS-API-Key value (e.g. "unset", a stale short string, a non-hex
+    // payload) MUST NOT short-circuit getAuthResult to api_key_invalid when
+    // the caller has already presented a valid JWT. The resolver returns
+    // null on malformed input (Task 1 contract), so the request is
+    // indistinguishable from "no API key was ever presented" and JWT auth
+    // must continue to win. Anything else regresses production traffic
+    // when a client/proxy accidentally sends a non-empty stale header.
+    it("falls through to JWT when X-XS-API-Key is structurally malformed", async () => {
+      const repo = makeRepository(async () => null);
+      const apiRouter = makeRouter(repo, [cmsWriteRoute]);
+      const match = apiRouter.findMatch(
+        "POST",
+        `/workspaces/${KEY_WORKSPACE_ID}/entries`,
+      );
+
+      (mockAuthzService.check as unknown as MockFn).mockResolvedValue(true);
+      const token = signHs256ForTest(
+        { sub: "user-jwt", exp: 2_000_000_000 },
+        "test-jwt-secret",
+      );
+      const req = new Request(
+        `http://localhost/workspaces/${KEY_WORKSPACE_ID}/entries`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${token}`,
+            // Structurally invalid — wrong marker, wrong length, non-hex.
+            "X-XS-API-Key": "unset",
+          },
+        },
+      );
+
+      const result = await apiRouter.authorize(match!, req);
+
+      expect(result).toEqual({ authorized: true, userId: "user-jwt" });
+      expect(repo.resolveByRawKey).not.toHaveBeenCalled();
+      expect(mockAuthzService.check).toHaveBeenCalledWith(
+        "user-jwt",
+        KEY_WORKSPACE_ID,
+        "cms.entry.create",
+      );
+    });
+
+    it("falls through to JWT when X-XS-API-Key has the marker but truncated payload", async () => {
+      const repo = makeRepository(async () => null);
+      const apiRouter = makeRouter(repo, [cmsWriteRoute]);
+      const match = apiRouter.findMatch(
+        "POST",
+        `/workspaces/${KEY_WORKSPACE_ID}/entries`,
+      );
+
+      (mockAuthzService.check as unknown as MockFn).mockResolvedValue(true);
+      const token = signHs256ForTest(
+        { sub: "user-jwt-2", exp: 2_000_000_000 },
+        "test-jwt-secret",
+      );
+      // Marker present but the secret portion is too short and contains a
+      // non-hex char (`g`). The resolver parses this to null; the router
+      // must NOT escalate it to a 401.
+      const truncatedKey = "xynes_live_0123456789abcdefg";
+      const req = new Request(
+        `http://localhost/workspaces/${KEY_WORKSPACE_ID}/entries`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "X-XS-API-Key": truncatedKey,
+          },
+        },
+      );
+
+      const result = await apiRouter.authorize(match!, req);
+
+      expect(result).toEqual({ authorized: true, userId: "user-jwt-2" });
+      expect(repo.resolveByRawKey).not.toHaveBeenCalled();
+      expect(mockAuthzService.check).toHaveBeenCalledWith(
+        "user-jwt-2",
+        KEY_WORKSPACE_ID,
+        "cms.entry.create",
+      );
+    });
+
+    it("falls through to JWT when Authorization carries a malformed xynes_live_ value", async () => {
+      // Authorization with the marker but garbage afterwards. Ensures the
+      // structural check on the Bearer-shaped path is also strict.
+      const repo = makeRepository(async () => null);
+      const apiRouter = makeRouter(repo, [cmsWriteRoute]);
+      const match = apiRouter.findMatch(
+        "POST",
+        `/workspaces/${KEY_WORKSPACE_ID}/entries`,
+      );
+
+      (mockAuthzService.check as unknown as MockFn).mockResolvedValue(true);
+      // We can ONLY trigger "JWT path takes over" via a separate header,
+      // since Authorization is already used by the malformed key. So we
+      // assert here the MUCH WEAKER property: malformed marker -> NOT a
+      // 401 (i.e. authorize falls through to the JWT-missing branch and
+      // returns 401 with code "UNAUTHORIZED" because no JWT was provided).
+      // The key signal is that the repository was NOT consulted and the
+      // router did NOT return INVALID_API_KEY/api_key_invalid.
+      void mockAuthzService;
+      const req = new Request(
+        `http://localhost/workspaces/${KEY_WORKSPACE_ID}/entries`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: "Bearer xynes_live_too-short-and-non-hex",
+          },
+        },
+      );
+
+      const result = await apiRouter.authorize(match!, req);
+
+      // Falls through to JWT path → no token → 401 UNAUTHORIZED with the
+      // user-path message (NOT the API-key-invalid message).
+      expect(result).toMatchObject({
+        authorized: false,
+        status: 401,
+        errorCode: "UNAUTHORIZED",
+        message: "Missing or invalid authentication",
+      });
+      expect(repo.resolveByRawKey).not.toHaveBeenCalled();
+    });
+
     it("does not call authz user check when an API key is presented", async () => {
       const repo = makeRepository(async () => ({
         apiKeyId: API_KEY_ID,
