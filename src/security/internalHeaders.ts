@@ -48,6 +48,16 @@ export interface InternalHeaderContext {
   userName?: string | null;
   userAvatarUrl?: string | null;
   requestId?: string | null;
+  /**
+   * Workspace Admin Integrations (Task 4): when the request is authenticated
+   * via a workspace API key, downstream services receive a discriminator
+   * (`X-XS-Actor-Type: api_key`) plus the non-secret API key id/prefix so
+   * audit logs and per-key rate limiting can attribute calls correctly.
+   *
+   * The raw key MUST NEVER be forwarded — only the public id and prefix.
+   */
+  apiKeyId?: string | null;
+  apiKeyPrefix?: string | null;
 }
 
 /**
@@ -116,6 +126,20 @@ export function buildInternalHeaders(
       "X-XS-User-Avatar-Url",
       sanitizeInternalHeaderValue(ctx.userAvatarUrl)
     );
+
+  // Workspace Admin Integrations (Task 4): forward actor discriminator and
+  // non-secret API key identifiers so downstream services can attribute the
+  // call. The raw API key is intentionally NEVER forwarded — only the
+  // public id and prefix surface here.
+  if (ctx.apiKeyId) {
+    headers.set("X-XS-Actor-Type", "api_key");
+    headers.set("X-XS-API-Key-Id", sanitizeInternalHeaderValue(ctx.apiKeyId));
+    if (ctx.apiKeyPrefix)
+      headers.set(
+        "X-XS-API-Key-Prefix",
+        sanitizeInternalHeaderValue(ctx.apiKeyPrefix)
+      );
+  }
 
   return headers;
 }

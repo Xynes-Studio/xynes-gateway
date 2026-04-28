@@ -586,4 +586,335 @@ describe("DynamicRouter", () => {
       expect(String(url)).toContain("/internal/doc-actions");
     });
   });
+
+  // ── Task 4: Workspace API key auth in dynamic router ─────────────
+  describe("workspace API key auth", () => {
+    // A structurally valid raw key:
+    //   xynes_live_<64 hex chars>
+    // The first 8 hex chars of the secret portion are the lookup prefix.
+    const RAW_KEY =
+      "xynes_live_0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    const KEY_PREFIX = "01234567";
+    const API_KEY_ID = "api-key-uuid-1";
+    const KEY_WORKSPACE_ID = "ws-1";
+
+    type ResolveByRawKey = (
+      rawKey: string,
+      keyPrefix: string,
+    ) => Promise<{
+      apiKeyId: string;
+      workspaceId: string;
+      keyPrefix: string;
+      scopes: readonly string[];
+    } | null>;
+
+    interface FakeApiKeyRepository {
+      resolveByRawKey: MockFn;
+      markLastUsed: MockFn;
+    }
+
+    function makeRepository(
+      resolveImpl: ResolveByRawKey,
+    ): FakeApiKeyRepository {
+      return {
+        resolveByRawKey: vi.fn(resolveImpl),
+        markLastUsed: vi.fn(async () => undefined),
+      };
+    }
+
+    const cmsReadRoute: Route = {
+      id: "cms-read",
+      pathPattern: "/workspaces/:workspaceId/content/:slug",
+      method: "GET",
+      serviceKey: "cms-core",
+      targetPath: "/content/:slug",
+      workspaceScoped: true,
+      actionKey: "cms.content.getPublishedBySlug",
+    };
+
+    const cmsWriteRoute: Route = {
+      id: "cms-write",
+      pathPattern: "/workspaces/:workspaceId/entries",
+      method: "POST",
+      serviceKey: "cms-core",
+      targetPath: "/entries",
+      workspaceScoped: true,
+      actionKey: "cms.entry.create",
+    };
+
+    function makeRouter(
+      repo: FakeApiKeyRepository,
+      routes: Route[] = [cmsReadRoute, cmsWriteRoute],
+    ) {
+      return new DynamicRouter({
+        routes,
+        authzService: mockAuthzService,
+        apiKeyRepository: repo,
+      });
+    }
+
+    it("authorizes an API key whose scopes include the route actionKey", async () => {
+      const repo = makeRepository(async () => ({
+        apiKeyId: API_KEY_ID,
+        workspaceId: KEY_WORKSPACE_ID,
+        keyPrefix: KEY_PREFIX,
+        scopes: ["cms.content.getPublishedBySlug"],
+      }));
+      const apiRouter = makeRouter(repo);
+      const match = apiRouter.findMatch(
+        "GET",
+        `/workspaces/${KEY_WORKSPACE_ID}/content/hello`,
+      );
+      expect(match).toBeDefined();
+
+      const req = new Request(
+        `http://localhost/workspaces/${KEY_WORKSPACE_ID}/content/hello`,
+        { headers: { Authorization: `Bearer ${RAW_KEY}` } },
+      );
+
+      const result = await apiRouter.authorize(match!, req);
+
+      expect(result).toEqual({ authorized: true, userId: null });
+      expect(req.auth?.actor?.kind).toBe("api_key");
+      expect(req.auth?.userId).toBeUndefined();
+      expect(mockAuthzService.check).not.toHaveBeenCalled();
+    });
+
+    it("denies an API key without a matching scope (403)", async () => {
+      const repo = makeRepository(async () => ({
+        apiKeyId: API_KEY_ID,
+        workspaceId: KEY_WORKSPACE_ID,
+        keyPrefix: KEY_PREFIX,
+        scopes: ["cms.content.listPublished"], // wrong scope
+      }));
+      const apiRouter = makeRouter(repo);
+      const match = apiRouter.findMatch(
+        "GET",
+        `/workspaces/${KEY_WORKSPACE_ID}/content/hello`,
+      );
+      const req = new Request(
+        `http://localhost/workspaces/${KEY_WORKSPACE_ID}/content/hello`,
+        { headers: { "X-XS-API-Key": RAW_KEY } },
+      );
+
+      const result = await apiRouter.authorize(match!, req);
+
+      expect(result).toMatchObject({ authorized: false, status: 403 });
+      expect(mockAuthzService.check).not.toHaveBeenCalled();
+    });
+
+    it("denies an API key whose workspaceId does not match the route param (403)", async () => {
+      const repo = makeRepository(async () => ({
+        apiKeyId: API_KEY_ID,
+        workspaceId: "ws-other", // mismatched
+        keyPrefix: KEY_PREFIX,
+        scopes: ["cms.content.getPublishedBySlug"],
+      }));
+      const apiRouter = makeRouter(repo);
+      const match = apiRouter.findMatch(
+        "GET",
+        `/workspaces/${KEY_WORKSPACE_ID}/content/hello`,
+      );
+      const req = new Request(
+        `http://localhost/workspaces/${KEY_WORKSPACE_ID}/content/hello`,
+        { headers: { Authorization: `Bearer ${RAW_KEY}` } },
+      );
+
+      const result = await apiRouter.authorize(match!, req);
+
+      expect(result).toMatchObject({ authorized: false, status: 403 });
+      expect(mockAuthzService.check).not.toHaveBeenCalled();
+    });
+
+    it("returns 401 when an API key credential is presented but unknown/revoked/expired", async () => {
+      const repo = makeRepository(async () => null);
+      const apiRouter = makeRouter(repo);
+      const match = apiRouter.findMatch(
+        "GET",
+        `/workspaces/${KEY_WORKSPACE_ID}/content/hello`,
+      );
+      const req = new Request(
+        `http://localhost/workspaces/${KEY_WORKSPACE_ID}/content/hello`,
+        { headers: { Authorization: `Bearer ${RAW_KEY}` } },
+      );
+
+      const result = await apiRouter.authorize(match!, req);
+
+      expect(result).toMatchObject({ authorized: false, status: 401 });
+      expect(mockAuthzService.check).not.toHaveBeenCalled();
+    });
+
+    it("returns 400 when conflicting API key headers are presented", async () => {
+      const repo = makeRepository(async () => null);
+      const apiRouter = makeRouter(repo);
+      const match = apiRouter.findMatch(
+        "GET",
+        `/workspaces/${KEY_WORKSPACE_ID}/content/hello`,
+      );
+      const otherKey =
+        "xynes_live_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+      const req = new Request(
+        `http://localhost/workspaces/${KEY_WORKSPACE_ID}/content/hello`,
+        {
+          headers: {
+            Authorization: `Bearer ${RAW_KEY}`,
+            "X-XS-API-Key": otherKey,
+          },
+        },
+      );
+
+      const result = await apiRouter.authorize(match!, req);
+
+      expect(result).toMatchObject({ authorized: false, status: 400 });
+      // Repository should NOT have been queried — extraction error fails fast.
+      expect(repo.resolveByRawKey).not.toHaveBeenCalled();
+    });
+
+    it("does not invoke API key repository for a JWT-shaped Authorization header", async () => {
+      const repo = makeRepository(async () => null);
+      const apiRouter = makeRouter(repo, [cmsWriteRoute]);
+      const match = apiRouter.findMatch(
+        "POST",
+        `/workspaces/${KEY_WORKSPACE_ID}/entries`,
+      );
+
+      (mockAuthzService.check as unknown as MockFn).mockResolvedValue(true);
+      const token = signHs256ForTest(
+        { sub: "user-jwt", exp: 2_000_000_000 },
+        "test-jwt-secret",
+      );
+      const req = new Request(
+        `http://localhost/workspaces/${KEY_WORKSPACE_ID}/entries`,
+        {
+          method: "POST",
+          headers: { Authorization: `Bearer ${token}` },
+        },
+      );
+
+      const result = await apiRouter.authorize(match!, req);
+
+      expect(result).toEqual({ authorized: true, userId: "user-jwt" });
+      expect(repo.resolveByRawKey).not.toHaveBeenCalled();
+      expect(mockAuthzService.check).toHaveBeenCalledWith(
+        "user-jwt",
+        KEY_WORKSPACE_ID,
+        "cms.entry.create",
+      );
+    });
+
+    it("does not call authz user check when an API key is presented", async () => {
+      const repo = makeRepository(async () => ({
+        apiKeyId: API_KEY_ID,
+        workspaceId: KEY_WORKSPACE_ID,
+        keyPrefix: KEY_PREFIX,
+        scopes: ["cms.entry.create"],
+      }));
+      const apiRouter = makeRouter(repo);
+      const match = apiRouter.findMatch(
+        "POST",
+        `/workspaces/${KEY_WORKSPACE_ID}/entries`,
+      );
+      const req = new Request(
+        `http://localhost/workspaces/${KEY_WORKSPACE_ID}/entries`,
+        {
+          method: "POST",
+          headers: { Authorization: `Bearer ${RAW_KEY}` },
+        },
+      );
+
+      const result = await apiRouter.authorize(match!, req);
+
+      expect(result).toEqual({ authorized: true, userId: null });
+      expect(mockAuthzService.check).not.toHaveBeenCalled();
+      expect(req.auth?.actor).toMatchObject({
+        kind: "api_key",
+        apiKeyId: API_KEY_ID,
+        keyPrefix: KEY_PREFIX,
+        workspaceId: KEY_WORKSPACE_ID,
+      });
+    });
+
+    it("populates a UserActor on the JWT path so consumers can migrate to actor", async () => {
+      const repo = makeRepository(async () => null);
+      const apiRouter = makeRouter(repo, [cmsWriteRoute]);
+      const match = apiRouter.findMatch(
+        "POST",
+        `/workspaces/${KEY_WORKSPACE_ID}/entries`,
+      );
+      (mockAuthzService.check as unknown as MockFn).mockResolvedValue(true);
+
+      const token = signHs256ForTest(
+        { sub: "user-actor", exp: 2_000_000_000 },
+        "test-jwt-secret",
+      );
+      const req = new Request(
+        `http://localhost/workspaces/${KEY_WORKSPACE_ID}/entries`,
+        {
+          method: "POST",
+          headers: { Authorization: `Bearer ${token}` },
+        },
+      );
+
+      const result = await apiRouter.authorize(match!, req);
+
+      expect(result).toEqual({ authorized: true, userId: "user-actor" });
+      expect(req.auth?.actor).toEqual({ kind: "user", userId: "user-actor" });
+      // Legacy field still populated for backward compat.
+      expect(req.auth?.userId).toBe("user-actor");
+    });
+
+    it("forwards X-XS-Actor-Type / X-XS-API-Key-Id / X-XS-API-Key-Prefix and never the raw key", async () => {
+      const repo = makeRepository(async () => ({
+        apiKeyId: API_KEY_ID,
+        workspaceId: KEY_WORKSPACE_ID,
+        keyPrefix: KEY_PREFIX,
+        scopes: ["cms.entry.create"],
+      }));
+      const apiRouter = makeRouter(repo);
+
+      global.fetch = vi
+        .fn()
+        .mockResolvedValue(
+          new Response('{"id":"e-1"}', { status: 201 }),
+        ) as unknown as typeof fetch;
+
+      const match = apiRouter.findMatch(
+        "POST",
+        `/workspaces/${KEY_WORKSPACE_ID}/entries`,
+      );
+      const req = new Request(
+        `http://localhost/workspaces/${KEY_WORKSPACE_ID}/entries`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${RAW_KEY}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ title: "x" }),
+        },
+      );
+
+      // Run authorize first to populate request.auth.actor (mirrors handle()).
+      await apiRouter.authorize(match!, req);
+      const response = await apiRouter.proxyRequest(match!, req, {});
+
+      expect(response.status).toBe(201);
+      const callArgs = (global.fetch as unknown as MockFn).mock.calls[0];
+      if (!callArgs) throw new Error("Fetch not called");
+      const headers = callArgs[1].headers as Headers;
+
+      expect(headers.get("X-XS-Actor-Type")).toBe("api_key");
+      expect(headers.get("X-XS-API-Key-Id")).toBe(API_KEY_ID);
+      expect(headers.get("X-XS-API-Key-Prefix")).toBe(KEY_PREFIX);
+      // No user identity headers when the actor is an API key.
+      expect(headers.get("X-XS-User-Id")).toBeNull();
+      expect(headers.get("X-XS-User-Email")).toBeNull();
+      // Raw key MUST NOT leak downstream.
+      expect(headers.get("Authorization")).toBeNull();
+      expect(headers.get("X-XS-API-Key")).toBeNull();
+
+      // Workspace context must still be forwarded.
+      expect(headers.get("X-Workspace-Id")).toBe(KEY_WORKSPACE_ID);
+    });
+  });
 });
