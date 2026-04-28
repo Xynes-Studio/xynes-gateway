@@ -28,6 +28,7 @@ import {
   extractApiKeyCredential,
   MAX_RAW_API_KEY_LENGTH,
   RAW_API_KEY_MARKER,
+  requestHasApiKeyShape,
   resolveApiKeyCredential,
   type ResolvedWorkspaceApiKey,
   type WorkspaceApiKeyRepository,
@@ -475,5 +476,69 @@ describe("resolveApiKeyCredential", () => {
     const result = await resolveApiKeyCredential(headers, repo);
 
     expect(result).toEqual(resolved);
+  });
+});
+
+describe("requestHasApiKeyShape (shared structural-shape probe)", () => {
+  // The 64-hex-char canonical secret used for happy-path assertions.
+  const VALID_HEX_64 =
+    "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef";
+
+  it("returns true for Authorization: Bearer xynes_live_<64 hex>", () => {
+    const headers = new Headers({
+      Authorization: `Bearer xynes_live_${VALID_HEX_64}`,
+    });
+    expect(requestHasApiKeyShape(headers)).toBe(true);
+  });
+
+  it("returns true for X-XS-API-Key: xynes_live_<64 hex>", () => {
+    const headers = new Headers({
+      "X-XS-API-Key": `xynes_live_${VALID_HEX_64}`,
+    });
+    expect(requestHasApiKeyShape(headers)).toBe(true);
+  });
+
+  it("returns false when no API-key headers are present", () => {
+    expect(requestHasApiKeyShape(new Headers())).toBe(false);
+  });
+
+  it("returns false for a JWT-shaped Authorization header", () => {
+    const headers = new Headers({
+      Authorization: "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.payload.sig",
+    });
+    expect(requestHasApiKeyShape(headers)).toBe(false);
+  });
+
+  it("returns false for a TRUNCATED xynes_live_ value (32 hex chars)", () => {
+    const headers = new Headers({
+      Authorization: "Bearer xynes_live_deadbeefdeadbeefdeadbeefdeadbeef",
+    });
+    expect(requestHasApiKeyShape(headers)).toBe(false);
+  });
+
+  it("returns false for non-hex padding after the marker", () => {
+    const headers = new Headers({
+      "X-XS-API-Key": `xynes_live_${"z".repeat(64)}`,
+    });
+    expect(requestHasApiKeyShape(headers)).toBe(false);
+  });
+
+  it("returns false for stale `unset` sentinel from misconfigured proxies", () => {
+    const headers = new Headers({ "X-XS-API-Key": "unset" });
+    expect(requestHasApiKeyShape(headers)).toBe(false);
+  });
+
+  it("returns false when extra junk is appended to a valid key", () => {
+    const headers = new Headers({
+      Authorization: `Bearer xynes_live_${VALID_HEX_64}TRAILING`,
+    });
+    expect(requestHasApiKeyShape(headers)).toBe(false);
+  });
+
+  it("returns false when the marker itself is wrong", () => {
+    const headers = new Headers({
+      Authorization: `Bearer xynes_test_${VALID_HEX_64}`,
+    });
+    expect(requestHasApiKeyShape(headers)).toBe(false);
   });
 });

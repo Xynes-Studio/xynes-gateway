@@ -14,6 +14,7 @@ import type { HttpRequestTelemetryInput } from "../telemetry/sanitize";
 import type { GatewayRouteMeta } from "./types";
 import { isApiKeyActor, isUserActor } from "../types/requestAuth";
 import { mapStatusToErrorCode } from "../utils/errorMapper";
+import { requestHasApiKeyShape } from "../security/apiKeyAuth";
 
 function parseMaxBytes(raw: string | undefined, fallback: number): number {
   if (!raw) return fallback;
@@ -54,26 +55,12 @@ function shouldEmitApiKeyTelemetry(
 
   // 401 invalid-API-key path: actor not attached. Heuristic: the route
   // matched (so route meta is populated), the response is 401, and the
-  // request presented an API-key-shaped credential. We use only safe,
-  // header-shape information — never the raw key value.
+  // request presented a STRUCTURALLY-valid API-key-shaped credential.
+  // We delegate to the canonical {@link requestHasApiKeyShape} so this
+  // gate stays in lockstep with `dynamicRouter.requestPresentsApiKey`.
   if (statusCode !== 401) return false;
   if (!routeMeta.routeId) return false;
-  return requestPresentedApiKey(c.req.raw.headers);
-}
-
-/**
- * Header-shape probe — returns true iff the request presented an
- * `Authorization: Bearer xynes_live_...` or `X-XS-API-Key: xynes_live_...`
- * header. The raw key value is never returned, logged, or stored.
- */
-function requestPresentedApiKey(headers: Headers): boolean {
-  const xKey = headers.get("x-xs-api-key");
-  if (xKey?.trim().startsWith("xynes_live_")) return true;
-  const auth = headers.get("authorization");
-  if (!auth) return false;
-  const trimmed = auth.trim();
-  if (!trimmed.toLowerCase().startsWith("bearer ")) return false;
-  return trimmed.slice(7).trim().startsWith("xynes_live_");
+  return requestHasApiKeyShape(c.req.raw.headers);
 }
 
 /**

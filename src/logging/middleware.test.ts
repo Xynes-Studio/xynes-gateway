@@ -156,6 +156,7 @@ describe("gatewayLoggingMiddleware — API key telemetry wiring (Risk 1)", () =>
       statusCode: 401,
       errorCode: "UNAUTHORIZED",
       headers: {
+        // Structurally valid: xynes_live_ + exactly 64 hex chars (8 × deadbeef).
         Authorization:
           "Bearer xynes_live_deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
       },
@@ -202,6 +203,42 @@ describe("gatewayLoggingMiddleware — API key telemetry wiring (Risk 1)", () =>
       },
       actor: undefined,
       statusCode: 404,
+    });
+
+    expect(trackHttpRequest).not.toHaveBeenCalled();
+  });
+
+  it("should NOT emit 401 telemetry when the Authorization header is malformed (truncated key)", async () => {
+    // Strict-shape regression: a TRUNCATED `xynes_live_*` value on
+    // Authorization must NOT count as "presented an API key" — otherwise
+    // a misconfigured proxy could pollute the audit trail with anonymous
+    // 401 emissions whenever it forwards a stale/garbled bearer header.
+    // This must mirror `dynamicRouter.requestPresentsApiKey` exactly.
+    await runRequest({
+      routeMeta: apiKeyRouteMeta,
+      actor: undefined,
+      statusCode: 401,
+      errorCode: "UNAUTHORIZED",
+      headers: {
+        // 32 hex chars instead of 64 - structurally invalid.
+        Authorization: "Bearer xynes_live_deadbeefdeadbeefdeadbeefdeadbeef",
+      },
+    });
+
+    expect(trackHttpRequest).not.toHaveBeenCalled();
+  });
+
+  it("should NOT emit 401 telemetry for non-hex padding after the marker", async () => {
+    // Strict-shape regression: only `[0-9a-f]{64}` after the marker
+    // counts. Garbage like `xynes_live_zzz...` must fall through.
+    await runRequest({
+      routeMeta: apiKeyRouteMeta,
+      actor: undefined,
+      statusCode: 401,
+      errorCode: "UNAUTHORIZED",
+      headers: {
+        "X-XS-API-Key": `xynes_live_${"z".repeat(64)}`,
+      },
     });
 
     expect(trackHttpRequest).not.toHaveBeenCalled();
