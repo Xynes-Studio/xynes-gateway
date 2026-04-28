@@ -215,5 +215,138 @@ describe("Telemetry Sanitization (TELE-GW-1)", () => {
       expect(eventStr).not.toContain("token123");
       expect(eventStr).not.toContain("auth=");
     });
+
+    describe("workspace API key actor (Task 5)", () => {
+      const apiKeyInput = {
+        routeId: "route-cms-1",
+        serviceKey: "cms-core",
+        actionKey: "cms.content.listPublished",
+        method: "GET",
+        path: "/workspaces/ws-1/content/blog",
+        statusCode: 200,
+        durationMs: 12,
+        workspaceId: "ws-1",
+        userId: null,
+        clientIp: "10.0.0.1",
+        userAgent: "Mozilla/5.0 (Test)",
+        pathPattern: "/workspaces/:workspaceId/content/:type",
+        actorType: "api_key" as const,
+        apiKeyId: "11111111-2222-3333-4444-555555555555",
+        keyPrefix: "ab12cd34",
+      };
+
+      it("should set actorType to 'api_key' on the event", () => {
+        const event = buildHttpRequestTelemetryEvent(apiKeyInput);
+        expect(event.actorType).toBe("api_key");
+      });
+
+      it("should default actorType to 'user' when no API key fields present", () => {
+        const event = buildHttpRequestTelemetryEvent(baseInput);
+        expect(event.actorType).toBe("user");
+      });
+
+      it("should default actorType to 'anonymous' when neither user nor API key present", () => {
+        const event = buildHttpRequestTelemetryEvent({
+          method: "GET",
+          path: "/health",
+          statusCode: 200,
+          durationMs: 5,
+        });
+        expect(event.actorType).toBe("anonymous");
+      });
+
+      it("should include apiKeyId at the top level for indexing", () => {
+        const event = buildHttpRequestTelemetryEvent(apiKeyInput);
+        expect(event.apiKeyId).toBe("11111111-2222-3333-4444-555555555555");
+      });
+
+      it("should include keyPrefix at the top level for indexing", () => {
+        const event = buildHttpRequestTelemetryEvent(apiKeyInput);
+        expect(event.keyPrefix).toBe("ab12cd34");
+      });
+
+      it("should keep apiKeyId / keyPrefix null for user actors", () => {
+        const event = buildHttpRequestTelemetryEvent(baseInput);
+        expect(event.apiKeyId).toBeNull();
+        expect(event.keyPrefix).toBeNull();
+      });
+
+      it("should preserve route actionKey for API key requests", () => {
+        const event = buildHttpRequestTelemetryEvent(apiKeyInput);
+        expect(event.actionKey).toBe("cms.content.listPublished");
+      });
+
+      it("should NOT include the raw API key anywhere on the event", () => {
+        const rawKey =
+          "xynes_live_ab12cd34deadbeefcafebabe1234567890abcdef1234567890abcdef12345678";
+        const event = buildHttpRequestTelemetryEvent({
+          ...apiKeyInput,
+          // Even if a caller accidentally smuggles the raw key into a string
+          // field, it must never reach the wire payload via this builder.
+          userAgent: `${rawKey} suffix`,
+        });
+        const serialized = JSON.stringify(event);
+        expect(serialized).not.toContain(rawKey);
+        expect(serialized).not.toContain("xynes_live_");
+      });
+
+      it("should NOT accept rawKey / keyHash on the input shape (compile-time guard)", () => {
+        // This test guards the input contract: HttpRequestTelemetryInput does
+        // NOT carry rawKey / keyHash. If a future refactor adds them, this
+        // assertion (and the type) must change deliberately.
+        const event = buildHttpRequestTelemetryEvent(apiKeyInput);
+        const serialized = JSON.stringify(event);
+        expect(serialized).not.toContain("rawKey");
+        expect(serialized).not.toContain("keyHash");
+        expect(serialized).not.toContain("key_hash");
+      });
+
+      it("should record denied requests with status code and actionKey", () => {
+        const denied = buildHttpRequestTelemetryEvent({
+          ...apiKeyInput,
+          statusCode: 403,
+          errorCode: "FORBIDDEN_SCOPE_MISS",
+        });
+        expect(denied.statusCode).toBe(403);
+        expect(denied.actionKey).toBe("cms.content.listPublished");
+        expect(denied.actorType).toBe("api_key");
+        expect(denied.apiKeyId).toBe(apiKeyInput.apiKeyId);
+        expect(denied.keyPrefix).toBe(apiKeyInput.keyPrefix);
+        expect(denied.meta.errorCode).toBe("FORBIDDEN_SCOPE_MISS");
+      });
+
+      it("should record unauthenticated denials (401) without inventing actor identity", () => {
+        const denied = buildHttpRequestTelemetryEvent({
+          method: "GET",
+          path: "/workspaces/ws-1/content/blog",
+          statusCode: 401,
+          durationMs: 3,
+          workspaceId: "ws-1",
+          actionKey: "cms.content.listPublished",
+          errorCode: "UNAUTHORIZED",
+        });
+        expect(denied.statusCode).toBe(401);
+        expect(denied.actorType).toBe("anonymous");
+        expect(denied.apiKeyId).toBeNull();
+        expect(denied.keyPrefix).toBeNull();
+        expect(denied.userId).toBeNull();
+        expect(denied.meta.errorCode).toBe("UNAUTHORIZED");
+      });
+
+      it("should not leak api key fields when actorType is explicitly 'user'", () => {
+        // Defense-in-depth: if a caller passes apiKeyId/keyPrefix while
+        // declaring actorType: "user", the builder must drop them rather
+        // than silently mix actor data.
+        const event = buildHttpRequestTelemetryEvent({
+          ...apiKeyInput,
+          actorType: "user",
+          userId: "user-789",
+        });
+        expect(event.actorType).toBe("user");
+        expect(event.userId).toBe("user-789");
+        expect(event.apiKeyId).toBeNull();
+        expect(event.keyPrefix).toBeNull();
+      });
+    });
   });
 });

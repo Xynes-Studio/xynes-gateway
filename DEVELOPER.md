@@ -588,6 +588,127 @@ flipped on once the backend foundation publishes the
   — Task 6.
 - End-to-end smoke against a live key — Task 7.
 
+## Workspace API Key Telemetry (WORKSPACE-ADMIN-INTEGRATIONS, Task 5)
+
+The gateway telemetry payload (`HttpRequestTelemetryEvent` from
+`src/telemetry/types.ts`) now carries the actor surface needed to audit
+workspace API key usage end-to-end. Source files:
+
+- `src/telemetry/types.ts` — canonical event + `TelemetryActorType` union
+  + `RAW_API_KEY_REDACTION_PATTERN` + extended `FORBIDDEN_TELEMETRY_FIELDS`.
+- `src/telemetry/sanitize.ts` — `HttpRequestTelemetryInput` extended with
+  `actorType` / `apiKeyId` / `keyPrefix`; the builder enforces actor
+  consistency and raw-key redaction.
+- `src/telemetry/service.ts` — `GatewayTelemetryService.trackHttpRequest`
+  forwards `X-Workspace-Id` / `X-XS-User-Id` from the **sanitized**
+  event so an API-key actor never leaks a user header to the
+  telemetry-service ingest endpoint.
+- Tests: `src/telemetry/sanitize.test.ts` (+11 actor tests),
+  `src/telemetry/service.test.ts` (+6 wire-payload tests).
+
+### Canonical event surface
+
+```ts
+type TelemetryActorType = "user" | "api_key" | "anonymous";
+
+interface HttpRequestTelemetryEvent {
+  // ... existing fields (type, routeId, serviceKey, actionKey, method,
+  // path, statusCode, durationMs, workspaceId, clientIpHash, timestamp,
+  // meta) ...
+  actorType: TelemetryActorType;
+  userId: string | null;       // set only when actorType === "user"
+  apiKeyId: string | null;     // set only when actorType === "api_key"
+  keyPrefix: string | null;    // set only when actorType === "api_key"
+}
+```
+
+### Actor resolution
+
+`buildHttpRequestTelemetryEvent` honours an explicit `input.actorType`,
+otherwise it infers: `apiKeyId` → `api_key`, else `userId` → `user`,
+else `anonymous`. **Mismatched id fields are dropped** at the builder
+boundary so callers cannot accidentally cross-contaminate identities:
+
+| Input                                                        | Resulting event                                            |
+| ------------------------------------------------------------ | ---------------------------------------------------------- |
+| `actorType: "user"`, `userId: "u-1"`                         | `userId: "u-1"`, `apiKeyId: null`, `keyPrefix: null`       |
+| `actorType: "user"`, `userId: "u-1"`, `apiKeyId: "k-1"`      | `userId: "u-1"`, `apiKeyId: null`, `keyPrefix: null`       |
+| `actorType: "api_key"`, `apiKeyId: "k-1"`, `keyPrefix: "ab"` | `userId: null`, `apiKeyId: "k-1"`, `keyPrefix: "ab"`       |
+| `actorType: "api_key"`, `apiKeyId: "k-1"`, `userId: "u-1"`   | `userId: null`, `apiKeyId: "k-1"`, `keyPrefix: null`       |
+| (none of the above) `userId: "u-1"`                          | `actorType: "user"`, `userId: "u-1"`                       |
+| (none) `apiKeyId: "k-1"`, `keyPrefix: "ab"`                  | `actorType: "api_key"`, `apiKeyId: "k-1"`, `keyPrefix: "ab"` |
+| (truly empty)                                                | `actorType: "anonymous"`, all id fields `null`             |
+
+### Security invariants
+
+- **No raw API key** ever reaches the telemetry-service. `Authorization`
+  / `X-XS-API-Key` are NOT forwarded as outbound headers, and the body
+  is built from the sanitized event (which has no raw-key field on its
+  type contract). A user-controlled `userAgent` containing a raw key
+  (`xynes_live_*`) is redacted via `RAW_API_KEY_REDACTION_PATTERN`
+  before it lands on `meta.userAgent`. This is defense-in-depth — the
+  gateway pipeline must never put a raw key on a telemetry input on
+  purpose.
+- **No stored hash** ever reaches telemetry. `FORBIDDEN_TELEMETRY_FIELDS`
+  now includes `keyhash` / `key_hash` / `rawkey` / `raw_key` /
+  `x-xs-api-key` (in addition to the existing `authorization` /
+  `cookie` / `x-internal-service-token` / `x-api-key` / `query` /
+  `body` / `rawBody`).
+- **Anonymous denials never invent an actor.** A 401 invalid-API-key
+  rejection is recorded with `actorType: "anonymous"` and all id
+  fields `null`, even if the request presented a structurally valid
+  `xynes_live_*` value — we never log the prefix of an unknown key as
+  if it were a resolved actor.
+- **Outbound header gating** uses the sanitized event:
+  `sendTelemetry(actionPayload, event.workspaceId, event.userId)`.
+  Because the builder nulls `event.userId` for non-user actors,
+  `X-XS-User-Id` is only set when `actorType === "user"`. For an API
+  key actor, only `X-Workspace-Id`, `X-Internal-Service-Token`, and
+  `X-Request-Id` are forwarded.
+
+### Denied request semantics
+
+The telemetry call site in the request-finished pipeline (which
+existing GatewayTelemetryService consumers will populate as part of
+the wider rollout) should always pass:
+
+- the route's `actionKey` (preserved from the matched route),
+- the final `statusCode`,
+- a stable `errorCode` for denials (e.g. `FORBIDDEN_SCOPE_MISS`,
+  `UNAUTHORIZED`, `WORKSPACE_MISMATCH`),
+
+so that security ops can audit which key tried which action. The
+canonical denial payloads are:
+
+| Outcome                          | actorType   | apiKeyId   | keyPrefix  | userId | statusCode | meta.errorCode          |
+| -------------------------------- | ----------- | ---------- | ---------- | ------ | ---------- | ----------------------- |
+| API-key scope miss               | `api_key`   | resolved   | resolved   | `null` | 403        | `FORBIDDEN_SCOPE_MISS`  |
+| API-key workspace mismatch       | `api_key`   | resolved   | resolved   | `null` | 403        | `WORKSPACE_MISMATCH`    |
+| Invalid / revoked / expired key  | `anonymous` | `null`     | `null`     | `null` | 401        | `UNAUTHORIZED`          |
+| Conflicting headers              | `anonymous` | `null`     | `null`     | `null` | 400        | `CONFLICTING_AUTH`      |
+| User JWT auth (existing path)    | `user`      | `null`     | `null`     | userId | 2xx/4xx    | (as today)              |
+
+### Wiring posture
+
+- `GatewayTelemetryService.trackHttpRequest` is the existing public
+  surface; this commit changes the **payload shape** but does NOT add
+  new call sites. The current `app.ts` does not yet wire telemetry
+  emission into the request-finished pipeline (see the broader
+  `src/logging/**` work). When that wiring lands, the call site needs
+  to read `request.auth.actor` (`GatewayRequestActor` from Task 3)
+  and pass `actorType` / `apiKeyId` / `keyPrefix` accordingly.
+- Until then, existing JWT call sites continue to work unchanged:
+  passing only `userId` infers `actorType: "user"`.
+- The telemetry-service ingest contract is unchanged. The new fields
+  ride on the existing `metadata: jsonb` column of `telemetry.events`,
+  so no schema migration is required on either side.
+
+### Out of scope (deferred)
+
+- Redaction rules for `x-xs-api-key`, `apiKey`, `rawKey`, `key_hash`
+  in request/response snippets (`src/logging/redaction.ts`) — Task 6.
+- End-to-end smoke against a live key — Task 7.
+
 ## Gateway Access Logging (GATEWAY-AUDIT-1)
 
 The gateway is the canonical capture point for all request outcomes: success, auth failures, upstream failures, rate-limit rejections, unmatched paths, and static routes.
