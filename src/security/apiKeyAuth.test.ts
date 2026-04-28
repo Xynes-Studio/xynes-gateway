@@ -28,6 +28,9 @@ import {
   extractApiKeyCredential,
   MAX_RAW_API_KEY_LENGTH,
   RAW_API_KEY_MARKER,
+  resolveApiKeyCredential,
+  type ResolvedWorkspaceApiKey,
+  type WorkspaceApiKeyRepository,
 } from "./apiKeyAuth";
 
 // ── Fixtures ────────────────────────────────────────────────────
@@ -275,5 +278,203 @@ describe("extractApiKeyCredential", () => {
       // Prefix never contains the marker.
       expect(credential?.keyPrefix.startsWith("xynes_")).toBe(false);
     });
+  });
+
+});
+
+// ──────────────────────────────────────────────────────────────────────────
+// Task 2: Repository lookup + resolveApiKeyCredential
+// ──────────────────────────────────────────────────────────────────────────
+
+/**
+ * Tiny in-memory implementation of the repository contract used to drive
+ * resolver behavior tests without touching a real database. The fake
+ * intentionally exposes spies on `resolveByRawKey` / `markLastUsed` calls
+ * so we can assert the resolver only persists `lastUsedAt` for verified
+ * keys and never echoes the raw key in any returned object.
+ */
+function createFakeRepository(initial: ResolvedWorkspaceApiKey[] = []): {
+  repo: WorkspaceApiKeyRepository;
+  calls: {
+    resolveByRawKey: Array<{ rawKey: string; keyPrefix: string }>;
+    markLastUsed: Array<{ apiKeyId: string; usedAt: Date }>;
+  };
+  setReturn: (value: ResolvedWorkspaceApiKey | null) => void;
+  setError: (err: Error | null) => void;
+} {
+  let nextReturn: ResolvedWorkspaceApiKey | null =
+    initial.length > 0 ? (initial[0] ?? null) : null;
+  let nextError: Error | null = null;
+  const calls = {
+    resolveByRawKey: [] as Array<{ rawKey: string; keyPrefix: string }>,
+    markLastUsed: [] as Array<{ apiKeyId: string; usedAt: Date }>,
+  };
+
+  return {
+    calls,
+    setReturn(value) {
+      nextReturn = value;
+    },
+    setError(err) {
+      nextError = err;
+    },
+    repo: {
+      async resolveByRawKey(rawKey, keyPrefix) {
+        calls.resolveByRawKey.push({ rawKey, keyPrefix });
+        if (nextError) throw nextError;
+        return nextReturn;
+      },
+      async markLastUsed(apiKeyId, usedAt) {
+        calls.markLastUsed.push({ apiKeyId, usedAt });
+      },
+    },
+  };
+}
+
+describe("resolveApiKeyCredential", () => {
+  it("returns null when no API-key-shaped credential is on the request", async () => {
+    const { repo, calls } = createFakeRepository();
+    const headers = new Headers({ Authorization: "Bearer eyJ.fake.jwt" });
+
+    const result = await resolveApiKeyCredential(headers, repo);
+
+    expect(result).toBeNull();
+    expect(calls.resolveByRawKey).toHaveLength(0);
+    expect(calls.markLastUsed).toHaveLength(0);
+  });
+
+  it("returns null when the prefix is unknown to the repository", async () => {
+    const fake = createFakeRepository();
+    fake.setReturn(null);
+
+    const headers = new Headers({ "X-XS-API-Key": VALID_RAW_KEY });
+    const result = await resolveApiKeyCredential(headers, fake.repo);
+
+    expect(result).toBeNull();
+    // Resolver MUST pass only the prefix and raw key — not anything derived
+    // from the marker — so the indexed lookup matches what was stored.
+    expect(fake.calls.resolveByRawKey).toEqual([
+      { rawKey: VALID_RAW_KEY, keyPrefix: EXPECTED_PREFIX },
+    ]);
+    expect(fake.calls.markLastUsed).toHaveLength(0);
+  });
+
+  it("returns the resolved key on a hit and records last-used asynchronously", async () => {
+    const fake = createFakeRepository();
+    const resolved: ResolvedWorkspaceApiKey = {
+      apiKeyId: "00000000-0000-0000-0000-0000000000aa",
+      workspaceId: "00000000-0000-0000-0000-0000000000ff",
+      keyPrefix: EXPECTED_PREFIX,
+      scopes: ["cms.entry.create", "cms.entry.update"],
+    };
+    fake.setReturn(resolved);
+
+    const headers = new Headers({ "X-XS-API-Key": VALID_RAW_KEY });
+    const result = await resolveApiKeyCredential(headers, fake.repo);
+
+    expect(result).toEqual(resolved);
+    expect(fake.calls.resolveByRawKey).toHaveLength(1);
+    // last-used must be recorded so the dashboard reflects activity.
+    expect(fake.calls.markLastUsed).toHaveLength(1);
+    expect(fake.calls.markLastUsed[0]?.apiKeyId).toBe(resolved.apiKeyId);
+    expect(fake.calls.markLastUsed[0]?.usedAt).toBeInstanceOf(Date);
+  });
+
+  it("returns the resolved key with empty scopes and still records last-used", async () => {
+    // Authentication succeeds; authorization (scope check) is the next
+    // layer's responsibility. An empty scope list MUST still resolve to a
+    // valid identity so we can audit "auth ok, denied for missing scope".
+    const fake = createFakeRepository();
+    const resolved: ResolvedWorkspaceApiKey = {
+      apiKeyId: "00000000-0000-0000-0000-0000000000bb",
+      workspaceId: "00000000-0000-0000-0000-0000000000ff",
+      keyPrefix: EXPECTED_PREFIX,
+      scopes: [],
+    };
+    fake.setReturn(resolved);
+
+    const headers = new Headers({ "X-XS-API-Key": VALID_RAW_KEY });
+    const result = await resolveApiKeyCredential(headers, fake.repo);
+
+    expect(result).not.toBeNull();
+    expect(result?.scopes).toEqual([]);
+    expect(fake.calls.markLastUsed).toHaveLength(1);
+  });
+
+  it("re-throws ApiKeyCredentialError on conflicting headers without consulting the repository", async () => {
+    const fake = createFakeRepository();
+
+    const headers = new Headers({
+      Authorization: `Bearer ${VALID_RAW_KEY}`,
+      "X-XS-API-Key": OTHER_RAW_KEY,
+    });
+
+    await expect(resolveApiKeyCredential(headers, fake.repo)).rejects.toThrow(
+      ApiKeyCredentialError,
+    );
+    expect(fake.calls.resolveByRawKey).toHaveLength(0);
+    expect(fake.calls.markLastUsed).toHaveLength(0);
+  });
+
+  it("does not attempt the lookup when the raw key is structurally malformed", async () => {
+    const fake = createFakeRepository();
+    // 63-char secret (1 char short) — extractor returns null, so the
+    // resolver must NOT call the repo (no DB load on garbage input).
+    const headers = new Headers({
+      "X-XS-API-Key": `${RAW_API_KEY_MARKER}${"a".repeat(63)}`,
+    });
+
+    const result = await resolveApiKeyCredential(headers, fake.repo);
+
+    expect(result).toBeNull();
+    expect(fake.calls.resolveByRawKey).toHaveLength(0);
+  });
+
+  it("never includes the raw key when a repository lookup throws", async () => {
+    // Defensive: even if the repository throws an opaque DB error, the
+    // resolver must not embed the raw key in the propagated error.
+    const fake = createFakeRepository();
+    const dbError = new Error("simulated db failure");
+    fake.setError(dbError);
+
+    const headers = new Headers({ "X-XS-API-Key": VALID_RAW_KEY });
+
+    let thrown: unknown = null;
+    try {
+      await resolveApiKeyCredential(headers, fake.repo);
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeInstanceOf(Error);
+    const serialized = JSON.stringify({
+      message: (thrown as Error).message,
+      stack: (thrown as Error).stack ?? null,
+    });
+    expect(serialized).not.toContain(VALID_SECRET);
+    expect(serialized).not.toContain(VALID_RAW_KEY);
+  });
+
+  it("does not block on markLastUsed failures — auth still succeeds", async () => {
+    // last-used is auditing metadata; a transient write failure must not
+    // cause a valid request to fail closed.
+    const resolved: ResolvedWorkspaceApiKey = {
+      apiKeyId: "00000000-0000-0000-0000-0000000000cc",
+      workspaceId: "00000000-0000-0000-0000-0000000000ff",
+      keyPrefix: EXPECTED_PREFIX,
+      scopes: ["cms.entry.publish"],
+    };
+    const repo: WorkspaceApiKeyRepository = {
+      async resolveByRawKey() {
+        return resolved;
+      },
+      async markLastUsed() {
+        throw new Error("simulated last-used write failure");
+      },
+    };
+
+    const headers = new Headers({ "X-XS-API-Key": VALID_RAW_KEY });
+    const result = await resolveApiKeyCredential(headers, repo);
+
+    expect(result).toEqual(resolved);
   });
 });

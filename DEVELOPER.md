@@ -193,6 +193,131 @@ rejected with a generic 401.
 - Scope enforcement in `dynamicRouter` — Task 4.
 - Telemetry / redaction extensions — Tasks 5–6.
 
+## Workspace API Key Repository Lookup (WORKSPACE-ADMIN-INTEGRATIONS, Task 2)
+
+Task 2 layers the repository contract and a Postgres-backed implementation
+on top of the Task 1 extractor. After this task lands, the gateway can
+take a raw API key from headers, look it up in
+`platform.workspace_api_keys`, verify the Argon2id hash, and return a
+non-secret resolved identity for downstream auth/scope enforcement.
+
+### Modules
+
+- Source:
+  - `src/security/apiKeyAuth.ts` — adds `ResolvedWorkspaceApiKey`,
+    `WorkspaceApiKeyRepository`, and `resolveApiKeyCredential`.
+  - `src/data/postgresWorkspaceApiKeyRepository.ts` — Postgres-backed
+    implementation that queries `platform.workspace_api_keys` +
+    `platform.workspace_api_key_scopes`.
+- Tests:
+  - `src/security/apiKeyAuth.test.ts` (resolver behavior, fake repo)
+  - `src/data/postgresWorkspaceApiKeyRepository.test.ts` (status/expiry/
+    hash gating)
+  - `src/data/postgresWorkspaceApiKeyRepository.defaults.test.ts` (default
+    SQL plumbing via the same `vi.module("postgres", …)` mock pattern as
+    `infra/db.test.ts`)
+
+### Public surface
+
+```ts
+import { resolveApiKeyCredential } from "./security/apiKeyAuth";
+import { PostgresWorkspaceApiKeyRepository } from "./data/postgresWorkspaceApiKeyRepository";
+
+const repo = new PostgresWorkspaceApiKeyRepository();
+const resolved = await resolveApiKeyCredential(req.headers, repo);
+// → { apiKeyId, workspaceId, keyPrefix, scopes } | null
+// → throws ApiKeyCredentialError on conflicting headers
+```
+
+### Resolution rules
+
+| Condition                                                         | Result                              |
+| ----------------------------------------------------------------- | ----------------------------------- |
+| No API-key-shaped header on the request                           | `null` (JWT path keeps running)     |
+| Conflicting `Authorization` and `X-XS-API-Key`                    | Throws `ApiKeyCredentialError`      |
+| Prefix not found in `platform.workspace_api_keys`                 | `null`                              |
+| Row found but `status = 'revoked'` or `'expired'`                 | `null`                              |
+| Row found but `expires_at <= now()`                               | `null`                              |
+| Row found, active, not expired, but Argon2id hash mismatches      | `null`                              |
+| Row found, active, hash matches                                   | `{ apiKeyId, workspaceId, keyPrefix, scopes }` |
+| Row found, hash matches, scopes empty                             | Resolves; scope enforcement is the next layer's job |
+| `Bun.password.verify` throws (corrupt stored hash)                | `null` (defense-in-depth)           |
+| `markLastUsed` UPDATE fails                                       | Auth still succeeds; failure is swallowed |
+
+### Hash verification contract
+
+The Postgres repository verifies the presented raw key against the stored
+hash using `Bun.password.verify` (Argon2id). This is the same primitive
+used by the accounts-service generator
+(`xynes-accounts-service/src/actions/handlers/integrations/apiKeyCrypto.ts`),
+which produces hashes with `algorithm: "argon2id", memoryCost: 19456, timeCost: 2`.
+
+The verifier is exposed as a constructor seam (`verifyHash`) so unit tests
+stay deterministic and fast — the seam is replaced with a synchronous
+`async () => true | false` in tests, while production uses the default
+Argon2id implementation.
+
+### Storage contract
+
+| Table / column                             | Purpose                                             |
+| ------------------------------------------ | --------------------------------------------------- |
+| `platform.workspace_api_keys.id`           | Stable api key id; surfaced to telemetry.           |
+| `platform.workspace_api_keys.workspace_id` | Workspace ownership; surfaced to telemetry & headers. |
+| `platform.workspace_api_keys.key_prefix`   | Indexed lookup (unique); non-secret.                |
+| `platform.workspace_api_keys.key_hash`     | Argon2id hash; never returned, never logged.        |
+| `platform.workspace_api_keys.status`       | Active/revoked/expired filter.                      |
+| `platform.workspace_api_keys.expires_at`   | Optional hard expiry (ISO-8601).                    |
+| `platform.workspace_api_keys.last_used_at` | Updated best-effort by `markLastUsed`.              |
+| `platform.workspace_api_key_scopes.action_key` | Action-key scopes; aggregated as `text[]`.       |
+
+The repository performs **no DDL** and creates **no new tables** — the
+schema is owned by
+`xynes/xynes-infra/supabase/migrations/20260424090000_workspace_admin_integrations.sql`
+(introduced in the backend foundation plan).
+
+### Security invariants
+
+- The raw key is forwarded **only** to the hash verifier. It is never
+  logged, persisted, embedded in errors, attached to the resolved object,
+  or returned to callers.
+- The stored `key_hash` is server-side state and is **never** returned to
+  callers, never logged, and never embedded in errors. The
+  `ResolvedWorkspaceApiKey` shape deliberately omits `keyHash`,
+  `expiresAt`, and `status`.
+- The default `fetchRowByPrefix` query uses postgres-js tagged templates,
+  so `key_prefix` is bound as a parameter — there is no SQL injection
+  surface in the lookup path. A dedicated test (`postgresWorkspaceApiKeyRepository.defaults.test.ts`)
+  asserts this by capturing the template strings and parameter values.
+- `resolveByRawKey` short-circuits cheap structural checks (status,
+  `expires_at`) before the Argon2id verification, but it never short-
+  circuits hash verification on a structurally-valid key — the hash is
+  the only authoritative check.
+- `markLastUsed` is best-effort: a transient UPDATE failure cannot deny
+  access to a valid key. The repository (and the resolver, defensively)
+  both swallow errors from the audit-write path.
+- Verifier exceptions (e.g. malformed stored hash) resolve to `null`, so
+  one corrupt row cannot crash the gateway.
+
+### Coverage
+
+`bun run coverage` reports:
+
+- `src/security/apiKeyAuth.ts`: 100% functions / 100% lines.
+- `src/data/postgresWorkspaceApiKeyRepository.ts`: 92.79% lines (the
+  uncovered range is the real `Bun.password.verify` Argon2id call which
+  is intentionally swapped via the `verifyHash` seam in tests).
+- Gateway overall: 93.65% functions / 91.48% lines, well above the
+  ADR-001 80% floor.
+
+### Out of scope for Task 2
+
+- `GatewayRequestActor` discriminator — Task 3.
+- Wiring `resolveApiKeyCredential` into `dynamicRouter` and enforcing
+  scopes against the resolved route `actionKey` — Task 4.
+- Telemetry fields for API key requests — Task 5.
+- Redaction rules for `x-xs-api-key`, `apiKey`, `rawKey`, `key_hash` —
+  Task 6.
+
 ## Gateway Access Logging (GATEWAY-AUDIT-1)
 
 The gateway is the canonical capture point for all request outcomes: success, auth failures, upstream failures, rate-limit rejections, unmatched paths, and static routes.
