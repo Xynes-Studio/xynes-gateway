@@ -470,6 +470,124 @@ isApiKeyActor(req.auth?.actor); // narrows to ApiKeyActor
 - Redaction rules for `x-xs-api-key`, `apiKey`, `rawKey`, `key_hash`
   — Task 6.
 
+## Workspace API Key Router Scope Enforcement (WORKSPACE-ADMIN-INTEGRATIONS, Task 4)
+
+Task 4 wires the resolver from Task 2 and the discriminated `GatewayRequestActor`
+from Task 3 into the dynamic router so a workspace API key can authenticate a
+request end-to-end without ever invoking the user RBAC service.
+
+### Auth resolution order
+
+`DynamicRouter.getAuthResult()` now resolves auth in this order:
+
+1. **API key path (when `apiKeyRepository` is configured)** — runs
+   `resolveApiKeyCredential(headers, repository)` from
+   [`src/security/apiKeyAuth.ts`](src/security/apiKeyAuth.ts).
+   - Resolved cleanly → attach an `ApiKeyActor` to `request.auth.actor` and
+     return `{ kind: "api_key", resolved }`.
+   - Resolver returned `null` AND the request actually presented an
+     API-key-shaped header (`Authorization: Bearer xynes_live_...` or
+     `X-XS-API-Key`) → return `{ kind: "api_key_invalid" }`. Fails closed
+     with HTTP `401` even on otherwise public routes.
+   - Resolver threw `ApiKeyCredentialError` (conflicting headers) →
+     return `{ kind: "api_key_conflict" }`. Translates to HTTP `400`.
+2. **JWT path (existing behaviour)** — same as before, but now also
+   populates `request.auth.actor = { kind: "user", userId }` for any
+   verified `sub`. Legacy `userId`/`email`/`name`/`avatarUrl` fields stay
+   populated for backward compatibility.
+
+The resolver fail-soft contract from Task 1 is preserved: an
+`Authorization: Bearer eyJ...` JWT, an absent header, or a malformed
+`xynes_live_...` value all fall through to the JWT path without ever
+calling the API-key repository.
+
+### Authorisation rules for an API key actor
+
+When the resolved actor is `api_key`, `DynamicRouter.authorize()` does NOT
+call `authzService.check`. Instead it enforces:
+
+- **Workspace ownership.** For `workspaceScoped` routes the resolved
+  `ApiKeyActor.workspaceId` MUST equal the route's `:workspaceId` path
+  param. Mismatch → HTTP `403` (`FORBIDDEN`,
+  `"API key not authorized for this workspace"`).
+- **Action-key scope.** For non-public routes the resolved
+  `ApiKeyActor.scopes` MUST include the route's `actionKey`. Missing
+  scope → HTTP `403` (`FORBIDDEN`, `"API key missing required scope"`).
+- Public routes (no `actionKey`, or `isPublic: true`) bypass scope
+  enforcement once workspace ownership is satisfied — same posture as the
+  JWT path.
+
+### Internal headers forwarded to downstream services
+
+`proxyRequest` branches on `request.auth.actor`:
+
+| Header                | User actor (JWT)        | API key actor              |
+| --------------------- | ----------------------- | -------------------------- |
+| `X-XS-User-Id`        | from JWT `sub`          | NOT set                    |
+| `X-XS-User-Email`     | from JWT `email`        | NOT set                    |
+| `X-XS-User-Name`      | from JWT name claims    | NOT set                    |
+| `X-XS-User-Avatar-Url`| from JWT picture/avatar | NOT set                    |
+| `X-XS-Actor-Type`     | NOT set                 | `api_key`                  |
+| `X-XS-API-Key-Id`     | NOT set                 | resolved `apiKeyId`        |
+| `X-XS-API-Key-Prefix` | NOT set                 | resolved `keyPrefix` (8 hex chars) |
+| `X-Workspace-Id`      | from route param        | from route param           |
+| `Authorization`       | NEVER forwarded         | NEVER forwarded            |
+| `X-XS-API-Key`        | NEVER forwarded         | NEVER forwarded            |
+
+The raw API key never leaves `apiKeyAuth.ts`. Only the public
+`apiKeyId` (DB UUID) and `keyPrefix` (non-secret 8-hex lookup index) are
+emitted downstream — see
+[`src/security/internalHeaders.ts`](src/security/internalHeaders.ts).
+
+### Wiring
+
+`DynamicRouterOptions` gained an optional `apiKeyRepository` field. When
+omitted, the router behaves exactly as it did before Task 4 — only
+JWT-authenticated callers can reach protected routes (zero-risk default
+for the rollout). Production wiring lives in `src/app.ts` and will be
+flipped on once the backend foundation publishes the
+`PostgresWorkspaceApiKeyRepository` instance.
+
+`setApiKeyRepository` / `getApiKeyRepository` mirrors the
+`setRateLimiter` / `setBodyLimiter` pattern for lazy initialisation.
+
+### Security invariants
+
+- API-key-shaped credentials that fail to resolve produce **401 even on
+  public routes**. An attacker presenting a structurally-valid but
+  unknown / revoked / expired / hash-mismatched key cannot fall through
+  to a public endpoint as the resolved actor — `requestPresentsApiKey`
+  forces a fail-closed outcome.
+- **Structural validation only.** `requestPresentsApiKey` mirrors the
+  resolver's `parseRawKey` shape (`xynes_live_` + 64 lowercase hex chars,
+  with no leading or trailing junk) using regexes built from the same
+  exported constants (`RAW_API_KEY_MARKER`, `API_KEY_SECRET_HEX_LENGTH`).
+  Malformed inputs (truncated strings, non-hex payloads, wrong markers,
+  stale `"unset"` values from misconfigured proxies) are NOT treated as
+  "attempted API-key auth" — they fall through to the JWT path so a
+  bogus header from a client/proxy cannot lock out otherwise valid JWT
+  traffic. This prevents the regression flagged on PR #31 by both Codex
+  and CodeRabbit.
+- `authzService.check` is NEVER invoked for an API key actor. The
+  resolver's `ResolvedWorkspaceApiKey.scopes` array is the only source of
+  truth for what the key can do.
+- `ApiKeyActor.scopes` is `readonly string[]`; `authorize()` uses
+  `Array.includes`, never mutates it.
+- `proxyRequest` reads `request.auth?.actor?.kind === "api_key"` BEFORE
+  reading any user fields, so an attacker cannot smuggle user identity
+  into a key-authenticated request via spoofed `auth.userId`.
+- Conflicting `Authorization` and `X-XS-API-Key` headers fail with HTTP
+  `400` BEFORE the repository is queried, so the bad request never
+  triggers a DB roundtrip.
+
+### Out of scope (deferred)
+
+- Telemetry fields (`actorType`, `apiKeyId`, `keyPrefix`, `actionKey`)
+  — Task 5.
+- Redaction rules for `x-xs-api-key`, `apiKey`, `rawKey`, `key_hash`
+  — Task 6.
+- End-to-end smoke against a live key — Task 7.
+
 ## Gateway Access Logging (GATEWAY-AUDIT-1)
 
 The gateway is the canonical capture point for all request outcomes: success, auth failures, upstream failures, rate-limit rejections, unmatched paths, and static routes.

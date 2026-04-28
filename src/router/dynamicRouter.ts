@@ -11,7 +11,15 @@ import {
 } from "../utils/errorMapper";
 import { buildInternalHeaders } from "../security/internalHeaders";
 import { extractBearerToken, verifyJwt, type JwtClaims } from "../utils/jwt";
-import type { RequestAuth } from "../types/requestAuth";
+import type { RequestAuth, ApiKeyActor } from "../types/requestAuth";
+import {
+  resolveApiKeyCredential,
+  ApiKeyCredentialError,
+  RAW_API_KEY_MARKER,
+  API_KEY_SECRET_HEX_LENGTH,
+  type ResolvedWorkspaceApiKey,
+  type WorkspaceApiKeyRepository,
+} from "../security/apiKeyAuth";
 import type { RateLimiter } from "../rateLimit/rateLimiter";
 import type { RateLimitContext } from "../rateLimit/types";
 import { extractClientIp } from "../rateLimit/keyBuilder";
@@ -25,6 +33,14 @@ export interface DynamicRouterOptions {
   authzService: IAuthzService;
   rateLimiter?: RateLimiter;
   bodyLimiter?: BodyLimiter;
+  /**
+   * Workspace Admin Integrations (Task 4): optional repository that lets the
+   * router authenticate inbound workspace API keys before falling back to the
+   * existing user-JWT path. When omitted, the router behaves exactly as it
+   * did before Task 4 — only JWT-authenticated callers can reach protected
+   * routes.
+   */
+  apiKeyRepository?: WorkspaceApiKeyRepository;
 }
 
 /**
@@ -45,11 +61,33 @@ interface BodyLimitCheckResult {
   response: Response | null;
 }
 
+/**
+ * Workspace Admin Integrations (Task 4): discriminated outcome of the
+ * gateway auth resolver. The router uses the `kind` discriminator to pick
+ * the correct authorisation strategy:
+ *
+ *   - `user`             → existing JWT-based RBAC path (may carry a null
+ *                          userId for anonymous public requests).
+ *   - `api_key`          → API key resolved cleanly; scope check happens in
+ *                          {@link DynamicRouter.authorize}.
+ *   - `api_key_invalid`  → the caller presented an API-key-shaped credential
+ *                          but the resolver returned null (unknown / revoked
+ *                          / expired / hash mismatch). MUST fail closed (401).
+ *   - `api_key_conflict` → both Authorization and X-XS-API-Key were present
+ *                          and disagreed. MUST fail with 400.
+ */
+type GatewayAuthResult =
+  | { kind: "user"; userId: string | null; claims: JwtClaims | null }
+  | { kind: "api_key"; resolved: ResolvedWorkspaceApiKey }
+  | { kind: "api_key_invalid" }
+  | { kind: "api_key_conflict" };
+
 export class DynamicRouter {
   private routes: Route[];
   private authzService: IAuthzService;
   private rateLimiter?: RateLimiter;
   private bodyLimiter?: BodyLimiter;
+  private apiKeyRepository?: WorkspaceApiKeyRepository;
 
   private static readonly AUTH_RESULT = Symbol("xynes.gateway.authResult");
 
@@ -75,6 +113,7 @@ export class DynamicRouter {
       this.authzService = routesOrOptions.authzService;
       this.rateLimiter = routesOrOptions.rateLimiter;
       this.bodyLimiter = routesOrOptions.bodyLimiter;
+      this.apiKeyRepository = routesOrOptions.apiKeyRepository;
     }
   }
 
@@ -149,6 +188,23 @@ export class DynamicRouter {
    */
   getBodyLimiter(): BodyLimiter | undefined {
     return this.bodyLimiter;
+  }
+
+  /**
+   * Workspace Admin Integrations (Task 4): set or update the API key
+   * repository instance after construction (mirrors setRateLimiter /
+   * setBodyLimiter for parity).
+   */
+  setApiKeyRepository(repository: WorkspaceApiKeyRepository): void {
+    this.apiKeyRepository = repository;
+  }
+
+  /**
+   * Workspace Admin Integrations (Task 4): retrieve the configured API
+   * key repository, if any.
+   */
+  getApiKeyRepository(): WorkspaceApiKeyRepository | undefined {
+    return this.apiKeyRepository;
   }
 
   private static readonly UNSAFE_PAYLOAD_KEYS = new Set([
@@ -322,28 +378,88 @@ export class DynamicRouter {
     if (typeof avatarUrl === "string" && avatarUrl.length > 0)
       auth.avatarUrl = avatarUrl;
 
+    // Workspace Admin Integrations (Task 4): also publish a discriminated
+    // UserActor on `auth.actor` so consumers (router scope checks,
+    // telemetry, downstream-header builders) can branch on the actor kind
+    // without sniffing the legacy fields. The legacy fields stay populated
+    // for backward compatibility during the rollout.
+    if (userId) {
+      auth.actor = { kind: "user", userId };
+    }
+
     request.auth = auth;
     return userId;
   }
 
+  /**
+   * Workspace Admin Integrations (Task 4): attach an API-key actor to the
+   * request after the resolver has confirmed the key. The legacy user
+   * fields (`userId`/`email`/`name`/`avatarUrl`) are intentionally left
+   * undefined — there is no human user behind an API key call.
+   */
+  private static attachApiKeyAuth(
+    request: Request,
+    resolved: ResolvedWorkspaceApiKey,
+  ): void {
+    const actor: ApiKeyActor = {
+      kind: "api_key",
+      apiKeyId: resolved.apiKeyId,
+      keyPrefix: resolved.keyPrefix,
+      workspaceId: resolved.workspaceId,
+      scopes: resolved.scopes,
+    };
+    request.auth = { actor };
+  }
+
   private async getAuthResult(
     request: Request,
-  ): Promise<{ userId: string | null; claims: JwtClaims | null }> {
+  ): Promise<GatewayAuthResult> {
     const holder = request as unknown as Record<
       symbol,
-      Promise<{ userId: string | null; claims: JwtClaims | null }> | undefined
+      Promise<GatewayAuthResult> | undefined
     >;
     const existing = holder[DynamicRouter.AUTH_RESULT];
     if (existing) return await existing;
 
-    const pending = (async (): Promise<{
-      userId: string | null;
-      claims: JwtClaims | null;
-    }> => {
+    const pending = (async (): Promise<GatewayAuthResult> => {
+      // Step 1 — try the workspace API key path first when a repository is
+      // configured. The resolver fail-soft to JWT auth on:
+      //   - missing API-key headers
+      //   - structurally malformed keys
+      // and re-throws ApiKeyCredentialError on conflicting headers.
+      if (this.apiKeyRepository) {
+        try {
+          const resolved = await resolveApiKeyCredential(
+            request.headers,
+            this.apiKeyRepository,
+          );
+          if (resolved !== null) {
+            DynamicRouter.attachApiKeyAuth(request, resolved);
+            return { kind: "api_key", resolved };
+          }
+
+          // We need to know whether the caller PRESENTED an API-key-shaped
+          // credential at all (so we can fail closed with 401 when the key
+          // is unknown/revoked/expired) without coupling the router to the
+          // resolver's internals. The simplest robust signal: the
+          // `Authorization` header carries the marker, OR the
+          // `X-XS-API-Key` header is present.
+          if (DynamicRouter.requestPresentsApiKey(request)) {
+            return { kind: "api_key_invalid" };
+          }
+        } catch (err) {
+          if (err instanceof ApiKeyCredentialError) {
+            return { kind: "api_key_conflict" };
+          }
+          throw err;
+        }
+      }
+
+      // Step 2 — existing JWT path.
       const token = extractBearerToken(request.headers.get("Authorization"));
       if (!token) {
         const userId = DynamicRouter.attachRequestAuth(request, null);
-        return { userId, claims: null };
+        return { kind: "user", userId, claims: null };
       }
 
       const claims = await verifyJwt(token, {
@@ -355,12 +471,56 @@ export class DynamicRouter {
       });
 
       const userId = DynamicRouter.attachRequestAuth(request, claims);
-      return { userId, claims };
+      return { kind: "user", userId, claims };
     })();
 
     holder[DynamicRouter.AUTH_RESULT] = pending;
     return await pending;
   }
+
+  /**
+   * Returns true iff the request carries headers that are STRUCTURALLY a
+   * workspace API key credential (i.e. would parse to a non-null
+   * `ApiKeyCredential` if presented to {@link extractApiKeyCredential}).
+   * Used to fail closed when an API-key-shaped header is present but the
+   * resolver returned null (unknown/revoked/expired/hash-mismatch).
+   *
+   * SECURITY: this MUST mirror the extractor's structural validation
+   * (see `parseRawKey` in `src/security/apiKeyAuth.ts`). If we treated
+   * any non-empty `X-XS-API-Key` or any `Bearer xynes_live_*` header as
+   * an API-key attempt, a client/proxy that accidentally forwarded a
+   * stale, truncated, or non-hex value would lock out otherwise valid
+   * JWT traffic with a 401 — a behavioural regression flagged on PR #31
+   * by both Codex and CodeRabbit. Malformed inputs MUST fall through to
+   * the JWT path because the resolver itself already returned null for
+   * them; only structurally-valid keys count as "attempted API-key auth".
+   */
+  private static requestPresentsApiKey(request: Request): boolean {
+    const auth = request.headers.get("authorization");
+    if (auth) {
+      const trimmed = auth.trim();
+      if (DynamicRouter.BEARER_API_KEY_RE.test(trimmed)) return true;
+    }
+    const xs = request.headers.get("x-xs-api-key");
+    if (xs && DynamicRouter.RAW_API_KEY_RE.test(xs.trim())) return true;
+    return false;
+  }
+
+  /**
+   * Structural API-key shape: `xynes_live_` + 64 lowercase hex chars,
+   * with no leading or trailing junk. Built from the same constants as
+   * the resolver's `parseRawKey` so the two stay in lockstep.
+   */
+  private static readonly RAW_API_KEY_RE = new RegExp(
+    `^${RAW_API_KEY_MARKER}[0-9a-f]{${API_KEY_SECRET_HEX_LENGTH}}$`,
+    "i",
+  );
+
+  /** Bearer-wrapped variant of {@link RAW_API_KEY_RE}. */
+  private static readonly BEARER_API_KEY_RE = new RegExp(
+    `^bearer\\s+${RAW_API_KEY_MARKER}[0-9a-f]{${API_KEY_SECRET_HEX_LENGTH}}$`,
+    "i",
+  );
 
   async authorize(
     match: RouteMatch,
@@ -384,19 +544,91 @@ export class DynamicRouter {
       };
     }
 
+    const authResult = await this.getAuthResult(request);
+
+    // Workspace Admin Integrations (Task 4): translate API-key resolver
+    // failures into HTTP semantics BEFORE we evaluate the route's auth
+    // requirements. A presented-but-bad API key must fail closed even if
+    // the route is otherwise public, so an attacker cannot use a bad key
+    // and still reach a public endpoint as the resolved (impostor) actor.
+    if (authResult.kind === "api_key_conflict") {
+      return {
+        authorized: false,
+        status: 400,
+        errorCode: "INVALID_API_KEY",
+        message:
+          "Conflicting API key headers: Authorization and X-XS-API-Key carry different values.",
+      };
+    }
+    if (authResult.kind === "api_key_invalid") {
+      return {
+        authorized: false,
+        status: 401,
+        errorCode: "UNAUTHORIZED",
+        message: "Invalid or expired API key",
+      };
+    }
+
+    // Workspace Admin Integrations (Task 4): API key path. The resolved
+    // key already carries its workspace and scopes — no authzService call
+    // is needed. We still enforce route workspaceScoped/workspaceId match
+    // and (for non-public routes) that the resolved scopes include the
+    // route's actionKey.
+    if (authResult.kind === "api_key") {
+      const { resolved } = authResult;
+
+      // Workspace ownership: an API key issued for workspace A must NOT
+      // be usable to read/write resources under workspace B.
+      if (route.workspaceScoped) {
+        if (params.workspaceId !== resolved.workspaceId) {
+          console.warn(
+            `[DynamicRouter] API key workspace mismatch on ${route.pathPattern}`,
+          );
+          return {
+            authorized: false,
+            status: 403,
+            errorCode: "FORBIDDEN",
+            message: "API key not authorized for this workspace",
+          };
+        }
+      }
+
+      // Public routes (no actionKey, or isPublic=true) bypass scope
+      // enforcement once workspace ownership is satisfied. This mirrors
+      // the JWT path's behaviour for `isPublic` / no-actionKey routes.
+      if (!route.actionKey || route.isPublic) {
+        return { authorized: true, userId: null };
+      }
+
+      // Non-public route: enforce action-key scope.
+      if (!resolved.scopes.includes(route.actionKey)) {
+        console.warn(
+          `[DynamicRouter] API key missing scope ${route.actionKey} on ${route.pathPattern}`,
+        );
+        return {
+          authorized: false,
+          status: 403,
+          errorCode: "FORBIDDEN",
+          message: "API key missing required scope",
+        };
+      }
+
+      return { authorized: true, userId: null };
+    }
+
+    // ── User / JWT path (existing behaviour) ──────────────────────
+    const { userId } = authResult;
+
     // If no actionKey, it's public (or at least not RBAC protected by this gate)
     if (!route.actionKey) {
-      const { userId } = await this.getAuthResult(request);
       return { authorized: true, userId };
     }
 
     // If route is explicitly public, skip authz
     if (route.isPublic) {
-      const { userId } = await this.getAuthResult(request);
       return { authorized: true, userId };
     }
 
-    const { userId } = await this.getAuthResult(request);
     if (!userId) {
       console.warn(
         `[DynamicRouter] Blocked request to ${route.pathPattern}: Missing/invalid Authorization token`,
@@ -453,10 +685,18 @@ export class DynamicRouter {
   ): Promise<Response> {
     const { route, params } = match;
     const { serviceKey, actionKey } = route;
-    const userId = request.auth?.userId ?? null;
-    const userEmail = request.auth?.email ?? null;
-    const userName = request.auth?.name ?? null;
-    const userAvatarUrl = request.auth?.avatarUrl ?? null;
+    // Workspace Admin Integrations (Task 4): branch on the resolved actor
+    // so we forward user identity ONLY for user/JWT calls, and emit the
+    // API-key discriminator + non-secret id/prefix for API-key calls. The
+    // raw API key is NEVER forwarded — it stays in the resolver.
+    const actor = request.auth?.actor;
+    const isApiKey = actor?.kind === "api_key";
+    const userId = isApiKey ? null : request.auth?.userId ?? null;
+    const userEmail = isApiKey ? null : request.auth?.email ?? null;
+    const userName = isApiKey ? null : request.auth?.name ?? null;
+    const userAvatarUrl = isApiKey ? null : request.auth?.avatarUrl ?? null;
+    const apiKeyId = isApiKey ? actor.apiKeyId : null;
+    const apiKeyPrefix = isApiKey ? actor.keyPrefix : null;
     const reqId = requestId || generateRequestId();
 
     if (!serviceKey || !actionKey) {
@@ -616,6 +856,8 @@ export class DynamicRouter {
       userEmail,
       userName,
       userAvatarUrl,
+      apiKeyId,
+      apiKeyPrefix,
       requestId: reqId,
     });
 
