@@ -53,13 +53,34 @@ function shouldEmitApiKeyTelemetry(
   // double-emit here.
   if (isUserActor(actor)) return false;
 
-  // 401 invalid-API-key path: actor not attached. Heuristic: the route
-  // matched (so route meta is populated), the response is 401, and the
-  // request presented a STRUCTURALLY-valid API-key-shaped credential.
-  // We delegate to the canonical {@link requestHasApiKeyShape} so this
-  // gate stays in lockstep with `dynamicRouter.requestPresentsApiKey`.
-  if (statusCode !== 401) return false;
+  // Anonymous denial path: the resolver rejected the credential before
+  // an actor could be attached, but the request presented an API-key-
+  // shaped header AND a route matched. We MUST emit so security ops can
+  // audit attempted-but-rejected workspace API key usage.
+  //
+  // Two anonymous-denial outcomes from `dynamicRouter.authorize`:
+  //   - 401 UNAUTHORIZED      → invalid / revoked / expired / hash-miss
+  //   - 400 INVALID_API_KEY   → conflicting Authorization + X-XS-API-Key
+  //
+  // Both are API-key auth attempts. The 400 path was previously dropped
+  // from telemetry (PR #32 review, Codex P2) — fixed here.
   if (!routeMeta.routeId) return false;
+
+  // 400 INVALID_API_KEY: the resolver itself classified this as an
+  // API-key auth attempt (conflicting headers), so we emit
+  // unconditionally. Re-probing structural shape would miss the case
+  // where the conflict arises from two marker-prefix headers that
+  // disagree but at least one is malformed.
+  const errorCode = c.get("gatewayErrorCode") as string | undefined;
+  if (statusCode === 400 && errorCode === "INVALID_API_KEY") return true;
+
+  // 401 UNAUTHORIZED: the resolver returned null. Only emit if the
+  // request presented a structurally-valid API-key-shaped header — a
+  // truncated/garbage header from a misconfigured proxy must NOT
+  // pollute the audit trail. We delegate to the canonical
+  // {@link requestHasApiKeyShape} so this gate stays in lockstep with
+  // `dynamicRouter.requestPresentsApiKey`.
+  if (statusCode !== 401) return false;
   return requestHasApiKeyShape(c.req.raw.headers);
 }
 

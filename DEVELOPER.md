@@ -674,19 +674,30 @@ the wider rollout) should always pass:
 
 - the route's `actionKey` (preserved from the matched route),
 - the final `statusCode`,
-- a stable `errorCode` for denials (e.g. `FORBIDDEN_SCOPE_MISS`,
-  `UNAUTHORIZED`, `WORKSPACE_MISMATCH`),
+- a stable `errorCode` for denials,
 
 so that security ops can audit which key tried which action. The
-canonical denial payloads are:
+canonical denial payloads, **as emitted by the runtime today** (codes
+come from `DynamicRouter.authorize` and flow through
+`gatewayErrorCode`):
 
-| Outcome                          | actorType   | apiKeyId   | keyPrefix  | userId | statusCode | meta.errorCode          |
-| -------------------------------- | ----------- | ---------- | ---------- | ------ | ---------- | ----------------------- |
-| API-key scope miss               | `api_key`   | resolved   | resolved   | `null` | 403        | `FORBIDDEN_SCOPE_MISS`  |
-| API-key workspace mismatch       | `api_key`   | resolved   | resolved   | `null` | 403        | `WORKSPACE_MISMATCH`    |
-| Invalid / revoked / expired key  | `anonymous` | `null`     | `null`     | `null` | 401        | `UNAUTHORIZED`          |
-| Conflicting headers              | `anonymous` | `null`     | `null`     | `null` | 400        | `CONFLICTING_AUTH`      |
-| User JWT auth (existing path)    | `user`      | `null`     | `null`     | userId | 2xx/4xx    | (as today)              |
+| Outcome                          | actorType   | apiKeyId   | keyPrefix  | userId | statusCode | meta.errorCode      |
+| -------------------------------- | ----------- | ---------- | ---------- | ------ | ---------- | ------------------- |
+| API-key scope miss               | `api_key`   | resolved   | resolved   | `null` | 403        | `FORBIDDEN`         |
+| API-key workspace mismatch       | `api_key`   | resolved   | resolved   | `null` | 403        | `FORBIDDEN`         |
+| Invalid / revoked / expired key  | `anonymous` | `null`     | `null`     | `null` | 401        | `UNAUTHORIZED`      |
+| Conflicting headers              | `anonymous` | `null`     | `null`     | `null` | 400        | `INVALID_API_KEY`   |
+| User JWT auth (existing path)    | `user`      | `null`     | `null`     | userId | 2xx/4xx    | (as today)          |
+
+> **Note (follow-up):** `FORBIDDEN` is currently shared between
+> "scope miss" and "workspace mismatch". A finer-grained mapping
+> (`FORBIDDEN_SCOPE_MISS` / `WORKSPACE_MISMATCH`) would let security
+> ops filter on the exact failure mode without correlating with the
+> downstream message string. That mapping work is deferred — it
+> requires extending `DynamicRouter.authorize`'s return shape and
+> the `gatewayErrorCode` pipeline together; tracked as a follow-up
+> story so this PR doesn't churn the public error-code surface
+> without explicit approval.
 
 ### `actionKey` contract (Risk 4)
 
@@ -713,22 +724,27 @@ The middleware in `src/logging/middleware.ts` (registered globally as
 telemetry alongside the existing access-log dispatch. The wiring is
 deliberately **scoped to API-key requests**:
 
-```
+```text
 shouldEmitApiKeyTelemetry(c, routeMeta, statusCode):
   if request.auth.actor is ApiKeyActor → emit
   if request.auth.actor is UserActor   → SKIP (covered by access-log path)
-  if no actor AND statusCode === 401 AND route matched
-     AND request presented an API-key-shaped header → emit (anonymous)
+  if route did not match (no routeId)  → SKIP
+  if statusCode === 400 AND gatewayErrorCode === "INVALID_API_KEY"
+     → emit (anonymous, conflicting headers)
+  if statusCode === 401 AND request presented an API-key-shaped header
+     → emit (anonymous, invalid/revoked/expired key)
   else → SKIP
 ```
 
-The header-shape probe (`requestPresentedApiKey`) checks only that the
-caller sent `Authorization: Bearer xynes_live_...` or
-`X-XS-API-Key: xynes_live_...`. The raw key value is never returned,
-logged, or stored — the probe only confirms shape, never identity. This
-gives security ops the audit trail for attempted-but-rejected workspace
-API key usage that the previous "actor-attached only" wiring would have
-silently dropped.
+The header-shape probe (`requestHasApiKeyShape`, exported from
+`src/security/apiKeyAuth.ts`) is byte-for-byte aligned with
+`extractApiKeyCredential` / `parseRawKey`: it accepts only
+`xynes_live_<64 lowercase hex>` with no leading/trailing junk, and
+applies the same DoS length cap on header values BEFORE any parsing.
+The raw key value is never returned, logged, or stored — the probe only
+confirms shape, never identity. This gives security ops the audit trail
+for attempted-but-rejected workspace API key usage that the previous
+"actor-attached only" wiring would have silently dropped.
 
 Independence from `GATEWAY_AUDIT_ENABLED`: API-key telemetry runs even
 when the access-log dispatch is disabled (`GATEWAY_AUDIT_ENABLED=false`).

@@ -57,27 +57,7 @@ export const API_KEY_SECRET_HEX_LENGTH = 64;
 export const MAX_RAW_API_KEY_LENGTH =
   RAW_API_KEY_MARKER.length + API_KEY_SECRET_HEX_LENGTH;
 
-/**
- * Strict structural shape of a raw workspace API key:
- * `xynes_live_` + exactly {@link API_KEY_SECRET_HEX_LENGTH} hex chars,
- * with no leading or trailing junk.
- *
- * Built from the same constants as the resolver's `parseRawKey` so the
- * two stay in lockstep.
- */
-export const RAW_API_KEY_RE = new RegExp(
-  `^${RAW_API_KEY_MARKER}[0-9a-f]{${API_KEY_SECRET_HEX_LENGTH}}$`,
-  "i",
-);
-
-/** Bearer-wrapped variant of {@link RAW_API_KEY_RE}. */
-export const BEARER_API_KEY_RE = new RegExp(
-  `^bearer\\s+${RAW_API_KEY_MARKER}[0-9a-f]{${API_KEY_SECRET_HEX_LENGTH}}$`,
-  "i",
-);
-
-/**
- * Typed credential shape returned to subsequent auth/lookup layers. */
+/** Typed credential shape returned to subsequent auth/lookup layers. */
 export interface ApiKeyCredential {
   /**
    * The full raw API key as presented by the caller.
@@ -340,27 +320,38 @@ export async function resolveApiKeyCredential(
  * structurally-valid API-key-shaped credential on either
  * `Authorization: Bearer xynes_live_...` or `X-XS-API-Key: xynes_live_...`.
  *
- * IMPORTANT — strictness:
- * - Only structurally valid keys (`xynes_live_` + exactly 64 hex chars,
- *   no junk) count. Truncated, padded, or non-hex values fall through
- *   so a misconfigured proxy cannot lock out otherwise-valid JWT traffic
- *   with spurious 401s.
- * - The raw key value is NEVER returned, logged, or stored — the probe
- *   only confirms shape, never identity.
+ * IMPORTANT — STRICTNESS CONTRACT:
+ *
+ * This probe MUST be byte-for-byte aligned with {@link extractApiKeyCredential}.
+ * If the probe says `true`, `extractApiKeyCredential` MUST return a
+ * non-null credential for the same headers (modulo the conflicting-headers
+ * branch, which throws). If the alignment slips, callers like
+ * `dynamicRouter.requestPresentsApiKey` (fail-closed gate) and
+ * `logging/middleware.shouldEmitApiKeyTelemetry` (anonymous-401 audit
+ * gate) will diverge from the actual auth-resolution outcome.
+ *
+ * Specifically rejects (matching `parseRawKey`):
+ * - case-different markers (`XYNES_LIVE_...` is not accepted)
+ * - uppercase hex in the secret portion
+ * - any leading or trailing whitespace/junk on the raw value
+ * - any total length other than {@link MAX_RAW_API_KEY_LENGTH}
+ * - oversized header values (DoS guard, before any parsing)
+ *
+ * The raw key value is NEVER returned, logged, or stored — the probe
+ * only confirms shape, never identity.
  *
  * Single source of truth for both:
  * - `dynamicRouter.requestPresentsApiKey` (fail-closed gating in the
  *   auth resolver)
- * - `logging/middleware.requestPresentedApiKey` (anonymous-401 telemetry
- *   gate so the audit trail mirrors the resolver's view)
+ * - `logging/middleware.shouldEmitApiKeyTelemetry` (anonymous-401
+ *   telemetry gate so the audit trail mirrors the resolver's view)
  */
 export function requestHasApiKeyShape(headers: Headers): boolean {
-  const auth = headers.get("authorization");
-  if (auth) {
-    const trimmed = auth.trim();
-    if (BEARER_API_KEY_RE.test(trimmed)) return true;
-  }
-  const xs = headers.get("x-xs-api-key");
-  if (xs && RAW_API_KEY_RE.test(xs.trim())) return true;
+  const fromAuth = readAuthorizationHeader(headers);
+  if (fromAuth !== null && parseRawKey(fromAuth) !== null) return true;
+
+  const fromXs = readXsApiKeyHeader(headers);
+  if (fromXs !== null && parseRawKey(fromXs) !== null) return true;
+
   return false;
 }

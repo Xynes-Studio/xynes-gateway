@@ -244,6 +244,71 @@ describe("gatewayLoggingMiddleware — API key telemetry wiring (Risk 1)", () =>
     expect(trackHttpRequest).not.toHaveBeenCalled();
   });
 
+  it("should emit 400 telemetry for INVALID_API_KEY (conflicting headers)", async () => {
+    // Codex P2 fix: conflicting Authorization + X-XS-API-Key headers
+    // make `dynamicRouter.authorize` return 400 with errorCode
+    // "INVALID_API_KEY". This IS an API-key auth attempt and MUST be
+    // captured in the audit trail. We emit unconditionally on this
+    // exact (statusCode, errorCode) pair without re-probing the
+    // structural shape (the resolver itself classified it).
+    await runRequest({
+      routeMeta: apiKeyRouteMeta,
+      actor: undefined,
+      statusCode: 400,
+      errorCode: "INVALID_API_KEY",
+      headers: {
+        Authorization:
+          "Bearer xynes_live_deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+        "X-XS-API-Key":
+          "xynes_live_cafebabecafebabecafebabecafebabecafebabecafebabecafebabecafebabe",
+      },
+    });
+
+    expect(trackHttpRequest).toHaveBeenCalledTimes(1);
+    const input = trackHttpRequest.mock.calls[0]![0] as HttpRequestTelemetryInput;
+    expect(input.actorType).toBe("anonymous");
+    expect(input.apiKeyId).toBeNull();
+    expect(input.keyPrefix).toBeNull();
+    expect(input.userId).toBeNull();
+    expect(input.actionKey).toBe("cms.content.listPublished");
+    expect(input.statusCode).toBe(400);
+    expect(input.errorCode).toBe("INVALID_API_KEY");
+  });
+
+  it("should NOT emit 400 telemetry for non-API-key 400 errors (e.g. PAYLOAD_TOO_LARGE)", async () => {
+    // The 400 emit path is gated on errorCode === "INVALID_API_KEY".
+    // Other 400s (body too large, malformed JSON, etc.) must NOT trigger
+    // API-key telemetry — they're not API-key auth attempts.
+    await runRequest({
+      routeMeta: apiKeyRouteMeta,
+      actor: undefined,
+      statusCode: 400,
+      errorCode: "PAYLOAD_TOO_LARGE",
+    });
+
+    expect(trackHttpRequest).not.toHaveBeenCalled();
+  });
+
+  it("should NOT emit 400 telemetry for INVALID_API_KEY when route did not match", async () => {
+    // Even with the correct (statusCode, errorCode) pair, no route =
+    // no actionKey context = no useful audit data. Skip.
+    await runRequest({
+      routeMeta: {
+        routeId: null,
+        pathPattern: null,
+        serviceKey: null,
+        actionKey: null,
+        workspaceId: null,
+        userId: null,
+      },
+      actor: undefined,
+      statusCode: 400,
+      errorCode: "INVALID_API_KEY",
+    });
+
+    expect(trackHttpRequest).not.toHaveBeenCalled();
+  });
+
   it("should NEVER include the raw API key in the telemetry input", async () => {
     // Defense-in-depth: even if a misbehaving caller put a raw key into a
     // logged header, it must never reach the telemetry input. We pass a
