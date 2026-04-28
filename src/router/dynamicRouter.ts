@@ -261,6 +261,38 @@ export class DynamicRouter {
     return params;
   }
 
+  private static firstNonEmptyString(...values: unknown[]): string | undefined {
+    for (const value of values) {
+      if (typeof value !== "string") continue;
+      const trimmed = value.trim();
+      if (trimmed.length > 0) {
+        return trimmed;
+      }
+    }
+
+    return undefined;
+  }
+
+  private static extractUserName(claims: JwtClaims | null): string | undefined {
+    const record = claims as Record<string, unknown> | null;
+    const userMetadata = DynamicRouter.isPlainRecord(record?.user_metadata)
+      ? record.user_metadata
+      : null;
+
+    return DynamicRouter.firstNonEmptyString(
+      record?.name,
+      record?.display_name,
+      record?.displayName,
+      record?.full_name,
+      record?.fullName,
+      userMetadata?.name,
+      userMetadata?.display_name,
+      userMetadata?.displayName,
+      userMetadata?.full_name,
+      userMetadata?.fullName,
+    );
+  }
+
   /**
    * Authorizes the request using AuthzService
    */
@@ -280,8 +312,8 @@ export class DynamicRouter {
     const email = (claims as Record<string, unknown> | null)?.email;
     if (typeof email === "string" && email.length > 0) auth.email = email;
 
-    const name = (claims as Record<string, unknown> | null)?.name;
-    if (typeof name === "string" && name.length > 0) auth.name = name;
+    const name = DynamicRouter.extractUserName(claims);
+    if (name) auth.name = name;
 
     const record = claims as Record<string, unknown> | null;
     const avatarUrl = (record?.avatar_url ??

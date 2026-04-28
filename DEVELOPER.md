@@ -50,6 +50,7 @@ These conventions are enforced to keep the gateway consistent with broader platf
 - **Auth context propagation (GATEWAY-AUTH-2)**
   - Gateway treats Supabase (or configured JWT authority) as the source of truth.
   - After JWT verification, the gateway sets `req.auth.userId` from the JWT `sub` claim.
+  - For `req.auth.name`, the gateway accepts common provider claim shapes in priority order: `name`, `display_name`, `displayName`, `full_name`, `fullName`, and the same keys under `user_metadata`.
   - Internal calls must derive `X-XS-User-Id` from `req.auth.userId` only; client-sent `X-XS-*` headers are never trusted.
 
 - **Security-by-default**
@@ -367,6 +368,107 @@ unrelated production paths. It is logged as future tech-debt cleanup.
 - Telemetry fields for API key requests — Task 5.
 - Redaction rules for `x-xs-api-key`, `apiKey`, `rawKey`, `key_hash` —
   Task 6.
+
+## Workspace API Key Request Actor Types (WORKSPACE-ADMIN-INTEGRATIONS, Task 3)
+
+Task 3 introduces the `GatewayRequestActor` discriminated union that
+downstream machinery (the Task 4 router, Task 5 telemetry, Task 6
+redaction) uses to pick the right authorisation strategy without
+re-deriving the caller identity from raw headers. The existing
+`RequestAuth` shape and the global `Request.auth` augmentation are
+preserved verbatim so the JWT path in `dynamicRouter.ts`,
+`logging/context.ts`, and `middleware/rateLimit.ts` keeps working
+unchanged.
+
+### Modules
+
+- Source:
+  - `src/types/requestAuth.ts` — adds `GatewayRequestActor`,
+    `UserActor`, `ApiKeyActor`, `isUserActor`, `isApiKeyActor`, and an
+    optional `actor` field on `RequestAuth`.
+- Tests:
+  - `src/types/requestAuth.test.ts` — 13 tests covering both actor
+    shapes, both type guards (including `undefined` inputs), legacy
+    field backward compatibility, and the global `Request.auth`
+    augmentation.
+
+### Public surface
+
+```ts
+import {
+  isApiKeyActor,
+  isUserActor,
+  type ApiKeyActor,
+  type GatewayRequestActor,
+  type RequestAuth,
+  type UserActor,
+} from "./types/requestAuth";
+
+// Discriminated union:
+export type GatewayRequestActor = UserActor | ApiKeyActor;
+
+export interface UserActor {
+  readonly kind: "user";
+  readonly userId: string;
+}
+
+export interface ApiKeyActor {
+  readonly kind: "api_key";
+  readonly apiKeyId: string;
+  readonly keyPrefix: string;
+  readonly workspaceId: string;
+  readonly scopes: readonly string[];
+}
+
+// Type guards (accept undefined for ergonomic chained access):
+isUserActor(req.auth?.actor);   // narrows to UserActor
+isApiKeyActor(req.auth?.actor); // narrows to ApiKeyActor
+```
+
+### Backward compatibility contract
+
+- The legacy fields `RequestAuth.userId`, `RequestAuth.email`,
+  `RequestAuth.name`, `RequestAuth.avatarUrl` are still populated by the
+  existing JWT path in `dynamicRouter.attachRequestAuth`. No consumer is
+  forced to migrate as part of this task.
+- The new `actor` field is optional. Tasks 4+ will start populating it
+  for both the JWT and API key paths and will incrementally migrate
+  consumers (`logging/context.ts`, `middleware/rateLimit.ts`, telemetry
+  builders) to read from `actor` via the type guards.
+- `request.auth` semantics are unchanged: still attached via the global
+  `declare global { interface Request { auth?: RequestAuth } }`
+  augmentation.
+
+### Security invariants
+
+- `ApiKeyActor` deliberately omits `rawKey`, `keyHash`, `expiresAt`, and
+  `status`. Only the public `apiKeyId` and `keyPrefix` are surfaced —
+  the same redaction contract as the resolver in `src/security/apiKeyAuth.ts`.
+- `scopes` is `readonly` to prevent the request pipeline from mutating
+  resolved scopes in-flight.
+- All actor fields are `readonly` so attaching an actor to `request.auth`
+  is conceptually attaching an immutable identity for the lifetime of
+  the request.
+
+### Coverage
+
+`bun run coverage` reports:
+
+- `src/types/requestAuth.ts`: 100% functions / 100% lines.
+- Gateway overall: 94.02% functions / 91.61% lines, well above the
+  ADR-001 80% floor.
+
+### Out of scope for Task 3
+
+- Populating `request.auth.actor` from the JWT or API key paths — Task 4.
+- Enforcing `ApiKeyActor.scopes` against the matched route's `actionKey`
+  in `dynamicRouter` — Task 4.
+- Forwarding `X-XS-Actor-Type`, `X-XS-API-Key-Id`, `X-XS-API-Key-Prefix`
+  internal headers — Task 4.
+- Telemetry fields (`actorType`, `apiKeyId`, `keyPrefix`, `actionKey`)
+  — Task 5.
+- Redaction rules for `x-xs-api-key`, `apiKey`, `rawKey`, `key_hash`
+  — Task 6.
 
 ## Gateway Access Logging (GATEWAY-AUDIT-1)
 
