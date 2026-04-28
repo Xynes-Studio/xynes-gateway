@@ -299,6 +299,64 @@ describe("Gateway Integration", () => {
     expect(body.data).toEqual(expect.objectContaining({ workspaces: [] }));
   });
 
+  it("should forward X-XS-User-Name from nested user_metadata.full_name when name claim is absent", async () => {
+    const app = await createTestApp();
+    const token = signHs256ForTest(
+      {
+        sub: "user-1",
+        email: "user-1@example.com",
+        user_metadata: {
+          full_name: "User One",
+        },
+        exp: 2_000_000_000,
+      },
+      "test-jwt-secret",
+    );
+
+    global.fetch = vi.fn((url: string | URL | Request, init?: RequestInit) => {
+      const urlStr = url.toString();
+      if (urlStr.includes("/authz/check")) {
+        throw new Error(
+          "authz should not be called for workspaceScoped=false routes",
+        );
+      }
+      if (urlStr.includes("/internal/accounts-actions")) {
+        const headers = new Headers(init?.headers);
+        expect(headers.get("X-XS-User-Name")).toBe("User One");
+
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              user: {
+                id: "user-1",
+                email: "user-1@example.com",
+                displayName: "User One",
+                avatarUrl: null,
+              },
+              workspaces: [],
+            }),
+            { status: 200 },
+          ),
+        );
+      }
+      if (urlStr.includes("/internal/telemetry-actions")) {
+        return Promise.resolve(
+          new Response(JSON.stringify({ id: "evt-1" }), { status: 201 }),
+        );
+      }
+      return Promise.reject(new Error(`Unknown URL: ${urlStr}`));
+    }) as unknown as typeof fetch;
+
+    const res = await app.request("/me", {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    });
+
+    expect(res.status).toBe(200);
+  });
+
   it("should proxy PATCH /me/profile to accounts-service (auth required, no authz, no workspace header)", async () => {
     const app = await createTestApp();
     const token = signHs256ForTest(
@@ -580,10 +638,13 @@ describe("Gateway Integration", () => {
       return Promise.reject(new Error(`Unknown URL: ${urlStr}`));
     }) as unknown as typeof fetch;
 
-    const res = await app.request("/workspaces/workspace-1/telemetry/events?limit=20", {
-      method: "GET",
-      headers: { Authorization: `Bearer ${token}` },
-    });
+    const res = await app.request(
+      "/workspaces/workspace-1/telemetry/events?limit=20",
+      {
+        method: "GET",
+        headers: { Authorization: `Bearer ${token}` },
+      },
+    );
 
     expect(res.status).toBe(200);
     const body = await res.json();
@@ -712,10 +773,13 @@ describe("Gateway Integration", () => {
       return Promise.reject(new Error(`Unknown URL: ${urlStr}`));
     }) as unknown as typeof fetch;
 
-    const res = await app.request("/workspaces/workspace-1/telemetry/stats/routes", {
-      method: "GET",
-      headers: { Authorization: `Bearer ${token}` },
-    });
+    const res = await app.request(
+      "/workspaces/workspace-1/telemetry/stats/routes",
+      {
+        method: "GET",
+        headers: { Authorization: `Bearer ${token}` },
+      },
+    );
 
     expect(res.status).toBe(200);
     const body = await res.json();

@@ -50,6 +50,7 @@ These conventions are enforced to keep the gateway consistent with broader platf
 - **Auth context propagation (GATEWAY-AUTH-2)**
   - Gateway treats Supabase (or configured JWT authority) as the source of truth.
   - After JWT verification, the gateway sets `req.auth.userId` from the JWT `sub` claim.
+  - For `req.auth.name`, the gateway accepts common provider claim shapes in priority order: `name`, `display_name`, `displayName`, `full_name`, `fullName`, and the same keys under `user_metadata`.
   - Internal calls must derive `X-XS-User-Id` from `req.auth.userId` only; client-sent `X-XS-*` headers are never trusted.
 
 - **Security-by-default**
