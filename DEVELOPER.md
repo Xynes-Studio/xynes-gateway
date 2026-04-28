@@ -688,23 +688,85 @@ canonical denial payloads are:
 | Conflicting headers              | `anonymous` | `null`     | `null`     | `null` | 400        | `CONFLICTING_AUTH`      |
 | User JWT auth (existing path)    | `user`      | `null`     | `null`     | userId | 2xx/4xx    | (as today)              |
 
-### Wiring posture
+### `actionKey` contract (Risk 4)
 
-- `GatewayTelemetryService.trackHttpRequest` is the existing public
-  surface; this commit changes the **payload shape** but does NOT add
-  new call sites. The current `app.ts` does not yet wire telemetry
-  emission into the request-finished pipeline (see the broader
-  `src/logging/**` work). When that wiring lands, the call site needs
-  to read `request.auth.actor` (`GatewayRequestActor` from Task 3)
-  and pass `actorType` / `apiKeyId` / `keyPrefix` accordingly.
-- Until then, existing JWT call sites continue to work unchanged:
-  passing only `userId` infers `actorType: "user"`.
-- The telemetry-service ingest contract is unchanged. The new fields
-  ride on the existing `metadata: jsonb` column of `telemetry.events`,
-  so no schema migration is required on either side.
+`HttpRequestTelemetryInput.actionKey` is **required** (`string | null`),
+NOT optional. The `null` value is the explicit "no route matched" /
+"public route without action contract" signal (e.g. `/health`, `/ready`,
+static routes).
+
+Why: callers used to be able to omit `actionKey` and silently drop the
+action context on denial paths (401 invalid-API-key, 403 scope-miss),
+which is exactly the data security ops needs to audit denied requests.
+Making the field required forces every call site to make a deliberate
+decision per route, even when the request is rejected before
+`authorize()` runs.
+
+This is a contract-tightening change with no backwards-compatibility
+concern because there were no production call sites at the time it
+landed (the only callers were the telemetry module's own tests).
+
+### Wiring posture (Risk 1)
+
+The middleware in `src/logging/middleware.ts` (registered globally as
+`app.use("*", gatewayLoggingMiddleware)` in `app.ts`) now emits API-key
+telemetry alongside the existing access-log dispatch. The wiring is
+deliberately **scoped to API-key requests**:
+
+```
+shouldEmitApiKeyTelemetry(c, routeMeta, statusCode):
+  if request.auth.actor is ApiKeyActor → emit
+  if request.auth.actor is UserActor   → SKIP (covered by access-log path)
+  if no actor AND statusCode === 401 AND route matched
+     AND request presented an API-key-shaped header → emit (anonymous)
+  else → SKIP
+```
+
+The header-shape probe (`requestPresentedApiKey`) checks only that the
+caller sent `Authorization: Bearer xynes_live_...` or
+`X-XS-API-Key: xynes_live_...`. The raw key value is never returned,
+logged, or stored — the probe only confirms shape, never identity. This
+gives security ops the audit trail for attempted-but-rejected workspace
+API key usage that the previous "actor-attached only" wiring would have
+silently dropped.
+
+Independence from `GATEWAY_AUDIT_ENABLED`: API-key telemetry runs even
+when the access-log dispatch is disabled (`GATEWAY_AUDIT_ENABLED=false`).
+Telemetry and access-logs are independent observability channels;
+disabling one must NOT silence the other. Verified by
+`src/logging/middleware.test.ts → "should emit telemetry even when
+access-log dispatch is disabled"`.
+
+Fire-and-forget: a thrown `trackHttpRequest` is swallowed at the
+middleware boundary (logged via `console.error`, never bubbled up). The
+service itself is also fire-and-forget internally. Verified by
+`src/logging/middleware.test.ts → "should swallow telemetry errors and
+not fail the request"`.
+
+DI-friendly: `createGatewayLoggingMiddleware(dispatcher, telemetry)`
+accepts an `IGatewayTelemetryService` for tests. The default factory
+uses the singleton `gatewayTelemetryService`.
+
+### `actionKey` on denied requests
+
+The middleware reads `actionKey` from `c.get("gatewayRouteMeta")` (set
+by `dynamicRouter.setRouteMeta()` BEFORE `authorize()` runs). This means
+denied requests retain the matched-route action context:
+
+| Request outcome                    | `actionKey` source                      |
+| ---------------------------------- | --------------------------------------- |
+| 200 / 2xx success                  | matched route                           |
+| 401 invalid-API-key (anonymous)    | matched route (set pre-auth)            |
+| 403 scope-miss (api_key actor)     | matched route                           |
+| 403 workspace mismatch             | matched route                           |
+| 404 route not matched              | `null` (and telemetry is NOT emitted)   |
+| 400 conflicting headers            | matched route if found, else `null`     |
 
 ### Out of scope (deferred)
 
+- JWT-actor telemetry emission (currently routed through the broader
+  access-log path; an equivalent `trackHttpRequest` emission for user
+  actors will land alongside the broader observability rollout).
 - Redaction rules for `x-xs-api-key`, `apiKey`, `rawKey`, `key_hash`
   in request/response snippets (`src/logging/redaction.ts`) — Task 6.
 - End-to-end smoke against a live key — Task 7.

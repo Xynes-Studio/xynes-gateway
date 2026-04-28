@@ -148,7 +148,18 @@ export function sanitizeForTelemetry(input: SanitizeInput): SanitizeOutput {
 export interface HttpRequestTelemetryInput {
   routeId?: string | null;
   serviceKey?: string | null;
-  actionKey?: string | null;
+  /**
+   * Route action key (e.g. `cms.content.listPublished`) — REQUIRED.
+   *
+   * Pass the matched route's action key for both successful and denied
+   * requests. Use `null` for routes that have no action contract
+   * (`/health`, `/ready`, static routes). This is deliberately required
+   * so callers cannot accidentally drop the action context on denial
+   * paths (e.g. 401 invalid-API-key, 403 scope-miss) where security ops
+   * needs to know *which action* was attempted. See "Risk 4" in the
+   * Workspace API Key Telemetry section of `DEVELOPER.md`.
+   */
+  actionKey: string | null;
   method: string;
   path: string;
   statusCode: number;

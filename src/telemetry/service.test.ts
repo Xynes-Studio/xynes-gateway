@@ -304,6 +304,7 @@ describe("GatewayTelemetryService (TELE-GW-1)", () => {
         path: "/test",
         statusCode: 200,
         durationMs: 10,
+        actionKey: null,
       });
       const elapsed = Date.now() - start;
 

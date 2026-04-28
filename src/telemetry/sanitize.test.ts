@@ -4,6 +4,7 @@ import {
   truncateUserAgent,
   sanitizeForTelemetry,
   buildHttpRequestTelemetryEvent,
+  type HttpRequestTelemetryInput,
 } from "./sanitize";
 
 describe("Telemetry Sanitization (TELE-GW-1)", () => {
@@ -176,11 +177,15 @@ describe("Telemetry Sanitization (TELE-GW-1)", () => {
     });
 
     it("should handle missing optional fields gracefully", () => {
-      const minimalInput = {
+      const minimalInput: HttpRequestTelemetryInput = {
         method: "GET",
         path: "/health",
         statusCode: 200,
         durationMs: 5,
+        // actionKey is REQUIRED (string | null) — public/health routes pass null
+        // explicitly so callers have to think about whether the route actually
+        // has an action contract. See "actionKey contract (Risk 4)" below.
+        actionKey: null,
       };
 
       const event = buildHttpRequestTelemetryEvent(minimalInput);
@@ -192,6 +197,69 @@ describe("Telemetry Sanitization (TELE-GW-1)", () => {
       expect(event.workspaceId).toBeNull();
       expect(event.userId).toBeNull();
       expect(event.clientIpHash).toBeUndefined();
+    });
+
+    describe("actionKey contract (Risk 4)", () => {
+      // These tests guard the contract that `actionKey` is REQUIRED (`string |
+      // null`) on `HttpRequestTelemetryInput` so callers cannot accidentally
+      // forget to include it on denial paths. The `null` value is the
+      // explicit "no route matched" / "public route without action" signal.
+
+      it("should accept actionKey: null for routes without an action contract", () => {
+        const event = buildHttpRequestTelemetryEvent({
+          method: "GET",
+          path: "/health",
+          statusCode: 200,
+          durationMs: 5,
+          actionKey: null,
+        });
+        expect(event.actionKey).toBeNull();
+      });
+
+      it("should accept actionKey: string for matched routes", () => {
+        const event = buildHttpRequestTelemetryEvent({
+          method: "POST",
+          path: "/workspaces/ws-1/documents",
+          statusCode: 201,
+          durationMs: 5,
+          actionKey: "docs.document.create",
+        });
+        expect(event.actionKey).toBe("docs.document.create");
+      });
+
+      it("should preserve actionKey on a 401 invalid-API-key denial", () => {
+        // The wiring caller MUST pass actionKey from the matched route even
+        // when the request is rejected before authorize() runs. Otherwise
+        // security ops loses the action context for denied requests.
+        const event = buildHttpRequestTelemetryEvent({
+          method: "GET",
+          path: "/workspaces/ws-1/content/blog",
+          statusCode: 401,
+          durationMs: 3,
+          workspaceId: "ws-1",
+          actionKey: "cms.content.listPublished",
+          errorCode: "UNAUTHORIZED",
+        });
+        expect(event.actionKey).toBe("cms.content.listPublished");
+        expect(event.statusCode).toBe(401);
+      });
+
+      it("should preserve actionKey on a 403 scope-miss denial", () => {
+        const event = buildHttpRequestTelemetryEvent({
+          method: "POST",
+          path: "/workspaces/ws-1/documents",
+          statusCode: 403,
+          durationMs: 4,
+          workspaceId: "ws-1",
+          actionKey: "docs.document.create",
+          actorType: "api_key",
+          apiKeyId: "11111111-2222-3333-4444-555555555555",
+          keyPrefix: "ab12cd34",
+          errorCode: "FORBIDDEN_SCOPE_MISS",
+        });
+        expect(event.actionKey).toBe("docs.document.create");
+        expect(event.statusCode).toBe(403);
+      });
     });
 
     it("should include errorCode in meta for error responses", () => {
@@ -251,6 +319,7 @@ describe("Telemetry Sanitization (TELE-GW-1)", () => {
           path: "/health",
           statusCode: 200,
           durationMs: 5,
+          actionKey: null,
         });
         expect(event.actorType).toBe("anonymous");
       });
