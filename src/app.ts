@@ -8,6 +8,7 @@ import { gatewayLoggingMiddleware } from "./logging";
 import { DynamicRouter } from "./router/dynamicRouter";
 import type { RouteRepository } from "./data/routeRepository";
 import { PostgresRouteRepository } from "./data/postgresRouteRepository";
+import { PostgresWorkspaceApiKeyRepository } from "./data/postgresWorkspaceApiKeyRepository";
 import { AuthzService } from "./services/authzService";
 import { config } from "./infra/config";
 import { healthRoute } from "./routes/health.route";
@@ -177,6 +178,18 @@ export const createApp = async (
     rateLimiter,
     bodyLimiter,
   });
+
+  // Workspace Admin Integrations (Task 7): wire the workspace API key
+  // repository so the dynamic router can authenticate and authorize
+  // workspace API keys (`Authorization: Bearer xynes_live_...` /
+  // `X-XS-API-Key: xynes_live_...`). When `DATABASE_URL` is not set
+  // (e.g. some unit tests / smoke environments without a DB), we keep
+  // the documented zero-risk default: only JWT-authenticated callers
+  // can reach protected routes.
+  if (process.env.DATABASE_URL) {
+    const apiKeyRepository = new PostgresWorkspaceApiKeyRepository();
+    dynamicRouter.setApiKeyRepository(apiKeyRepository);
+  }
 
   // Dynamic Router Hook
   app.all("*", dynamicRouter.handle);
