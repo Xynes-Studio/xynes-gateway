@@ -106,6 +106,29 @@ describe("redactTextSnippet — workspace API key surfaces (Task 6)", () => {
       expect(out).not.toContain(RAW_API_KEY);
       expect(out.match(/\[REDACTED\]/g)).toHaveLength(2);
     });
+
+    it("redacts compound api-key field names (PR #33 Codex P1)", () => {
+      // The pre-Task-6 substring matcher (`api[-_]?key`) would scrub these
+      // names. The anchored exact-match introduced by Task 6 alone would
+      // miss them, leaking secrets. The third tier restores substring
+      // coverage for any name that contains `apikey` (case-insensitive,
+      // dashes/underscores ignored), while still preserving the explicit
+      // public-handle safelist (`apiKeyId`, `keyPrefix`).
+      const out = redactTextSnippet(
+        JSON.stringify({
+          "x-api-key": "sk_live_AAA",
+          workspaceApiKey: "sk_live_BBB",
+          customer_api_key: "sk_live_CCC",
+          "third-party-api-key": "sk_live_DDD",
+        }),
+      );
+
+      expect(out).not.toContain("sk_live_AAA");
+      expect(out).not.toContain("sk_live_BBB");
+      expect(out).not.toContain("sk_live_CCC");
+      expect(out).not.toContain("sk_live_DDD");
+      expect(out.match(/\[REDACTED\]/g)).toHaveLength(4);
+    });
   });
 
   describe("raw key value surfaces (string form)", () => {
@@ -139,6 +162,32 @@ describe("redactTextSnippet — workspace API key surfaces (Task 6)", () => {
       expect(out).not.toContain(RAW_API_KEY);
       expect(out).toContain("[REDACTED]");
     });
+
+    it("redacts an Argon2 key hash embedded in a non-JSON snippet (PR #33 CodeRabbit Major)", () => {
+      // Defense-in-depth: if a downstream service echoes a stored
+      // workspace-API-key hash inside a plain-text error body, the text
+      // pattern must scrub it even though the field name is not sensitive.
+      const text = `auth failure: hash=${KEY_HASH}`;
+
+      const out = redactTextSnippet(text);
+
+      expect(out).not.toContain(KEY_HASH);
+      expect(out).toContain("[REDACTED]");
+      expect(out).toContain("auth failure: hash=");
+    });
+
+    it("redacts an Argon2 key hash inside a non-sensitive JSON value (PR #33 CodeRabbit Major)", () => {
+      // Field name (`message`) is not on any sensitive list, so the
+      // per-key tier does not fire. The free-text scrub must still
+      // remove the hash value to prevent server-side material from
+      // landing in captured snippets.
+      const out = redactTextSnippet(
+        JSON.stringify({ message: `verify failed for ${KEY_HASH}` }),
+      );
+
+      expect(out).not.toContain(KEY_HASH);
+      expect(out).toContain("[REDACTED]");
+    });
   });
 
   describe("non-sensitive surfaces are preserved", () => {
@@ -159,33 +208,27 @@ describe("redactTextSnippet — workspace API key surfaces (Task 6)", () => {
       expect(out).toContain(apiKeyId);
     });
 
-    it("preserves existing authorization redaction (regression guard)", () => {
-      const out = redactTextSnippet(
-        JSON.stringify({ authorization: "Bearer eyJabc.def.ghi" }),
-      );
-
-      expect(out).not.toContain("eyJabc.def.ghi");
-      expect(out).toContain("[REDACTED]");
-    });
-
-    it("preserves substring-match defense-in-depth for legacy token names", () => {
-      // Pre-Task-6 behaviour: any field whose name contains
-      // `token` / `secret` / `password` / `cookie` / `authorization`
-      // is redacted via substring match. Task 6 must not regress this.
+    it("preserves api-key compound IDs and prefixes (PR #33 Codex P1 safelist)", () => {
+      // The third-tier substring match for `apikey` must NOT redact
+      // public audit handles even though they contain the substring.
+      // Safelist: any key ending in `Id`, `_id`, `-id`, `Prefix`,
+      // `_prefix`, `-prefix` is preserved.
       const out = redactTextSnippet(
         JSON.stringify({
-          accessToken: "eyJabc",
-          refreshToken: "eyJxyz",
-          mySecret: "shhh",
-          userPassword: "p@ssw0rd",
+          apiKeyId: "11111111-2222-3333-4444-555555555555",
+          api_key_id: "22222222-3333-4444-5555-666666666666",
+          "api-key-id": "33333333-4444-5555-6666-777777777777",
+          apiKeyPrefix: "abcd1234",
+          api_key_prefix: "efgh5678",
         }),
       );
 
-      expect(out).not.toContain("eyJabc");
-      expect(out).not.toContain("eyJxyz");
-      expect(out).not.toContain("shhh");
-      expect(out).not.toContain("p@ssw0rd");
-      expect(out.match(/\[REDACTED\]/g)).toHaveLength(4);
+      expect(out).toContain("11111111-2222-3333-4444-555555555555");
+      expect(out).toContain("22222222-3333-4444-5555-666666666666");
+      expect(out).toContain("33333333-4444-5555-6666-777777777777");
+      expect(out).toContain("abcd1234");
+      expect(out).toContain("efgh5678");
+      expect(out).not.toContain("[REDACTED]");
     });
   });
 });

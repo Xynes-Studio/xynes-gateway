@@ -797,10 +797,11 @@ dispatches by `xynes/xynes-gateway/src/logging/middleware.ts` (via
 `captureRequestSnippet` / `captureResponseSnippet`). Task 6 hardens it
 against workspace API key material leaking into stored snippets.
 
-### Two-tier key-name match
+### Three-tier key-name match
 
 `isSensitiveKey(key)` (private to `redaction.ts`) tests the field name
-against two patterns and redacts the value if either matches:
+against three patterns and redacts the value if any of the first two
+matches, or if tier 3 matches AND the safelist does not:
 
 1. **Loose substring match** (preserves pre-Task-6 behaviour exactly):
    `authorization | cookie | set-cookie | password | token | secret |
@@ -809,21 +810,25 @@ against two patterns and redacts the value if either matches:
    `userPassword` get scrubbed via substring presence. Do **not**
    tighten this to anchored exact-match; it is intentionally broad.
 
-2. **Anchored exact match** (new for Task 6) for API-key surfaces:
+2. **Anchored exact match** for canonical workspace API-key surfaces:
    `^(?:(?:x[-_]?xs[-_]?)?api[-_]?key|raw[-_]?key|key[-_]?hash)$`.
    Redacts `apiKey`, `api_key`, `api-key`, `x-xs-api-key`,
-   `xXsApiKey`, `rawKey`, `raw_key`, `keyHash`, `key_hash`. Anchoring
-   is **mandatory** because the public audit handles `apiKeyId` (UUID)
-   and `keyPrefix` (8-char hex) must remain readable in operator logs.
-   The gateway publishes both fields in telemetry (Task 5) — if
-   redaction stripped them, security-ops would lose the audit trail
-   for "which key did action X".
+   `xXsApiKey`, `rawKey`, `raw_key`, `keyHash`, `key_hash`. These are
+   the canonical names the gateway itself produces.
+
+3. **Loose `apikey` substring match** (PR #33 Codex P1) for compound
+   third-party names like `x-api-key`, `workspaceApiKey`,
+   `customer_api_key`, `third-party-api-key`. Restores the pre-Task-6
+   substring coverage for arbitrary callers without breaking public
+   audit handles. Public audit handles are kept readable via the
+   safelist `(?:[a-z]|[-_])(?:id|prefix)$/i` — e.g. `apiKeyId`,
+   `apiKeyPrefix`, `api_key_id`, `api-key-prefix`.
 
 ### Free-text scrub for serialized strings
 
 `SENSITIVE_TEXT_PATTERN` is the regex applied to (a) raw body text
 when it does not parse as JSON, and (b) every leaf string value inside
-parsed JSON. It has three arms:
+parsed JSON. It has four arms:
 
 - `bearer\s+[a-z0-9\-._~+/]+=*` — Bearer tokens (JWT or otherwise).
 - Quoted-header serializations: `authorization`,
@@ -833,30 +838,41 @@ parsed JSON. It has three arms:
 - `xynes_live_[a-f0-9]+` — raw workspace API keys, anywhere they
   appear, regardless of which field they leak through. The pattern
   matches the `RAW_API_KEY_MARKER` from `src/security/apiKeyAuth.ts`.
+- `\$argon2(?:id|i|d)?\$[^\s"']+` — Argon2 password hashes (PR #33
+  CodeRabbit Major). Catches stored workspace-API-key hashes echoed
+  back by a downstream service inside an otherwise-non-sensitive
+  field (e.g. `message: "verify failed for $argon2id$..."`).
 
 ### What is preserved (must remain readable in logs)
 
 - `apiKeyId` (UUID) — public audit handle, published in telemetry.
-- `keyPrefix` (8-char hex) — public audit handle, published in
-  telemetry.
+- `apiKeyPrefix` / `keyPrefix` (8-char hex) — public audit handle,
+  published in telemetry.
+- `api_key_id` / `api-key-id` / `api_key_prefix` / `api-key-prefix`
+  — snake-case and kebab-case variants of the audit handles.
 - `actorType` (`user` / `api_key` / `anonymous`) — actor classification.
 - All non-secret fields like `workspaceId`, `routeId`, `actionKey`.
 
 ### Tests
 
-`xynes/xynes-gateway/src/logging/redaction.test.ts` (18 tests, 42
+`xynes/xynes-gateway/src/logging/redaction.test.ts` (20 tests, 51
 expects) covers the contract:
 
-- 9 tests for object-form sensitive keys: `x-xs-api-key`, `apiKey`,
-  `api_key`, `rawKey`, `raw_key`, `keyHash`, `key_hash`, plus nested
-  payloads and array payloads.
-- 3 tests for string-form raw key surfaces: `xynes_live_<hex>` in
-  non-JSON snippets, inside JSON value strings, and inside quoted
-  header serializations within plain text.
-- 4 tests for non-sensitive preservation: `keyPrefix`, `apiKeyId`,
-  the existing `authorization` regression guard, and the substring-
-  match defense-in-depth regression for `accessToken` /
-  `refreshToken` / `mySecret` / `userPassword`.
+- Object-form sensitive keys: `x-xs-api-key`, `apiKey`, `api_key`,
+  `rawKey`, `raw_key`, `keyHash`, `key_hash`, nested payloads, array
+  payloads, and compound third-party names (`x-api-key`,
+  `workspaceApiKey`, `customer_api_key`, `third-party-api-key`).
+- String-form raw key surfaces: `xynes_live_<hex>` in non-JSON
+  snippets, inside JSON value strings, and inside quoted header
+  serializations within plain text.
+- String-form Argon2 hash surfaces: `$argon2id$...` in non-JSON
+  snippets and inside non-sensitive JSON value strings.
+- Non-sensitive preservation: `keyPrefix`, `apiKeyId`, the existing
+  `authorization` regression guard, the substring-match
+  defense-in-depth regression for `accessToken` / `refreshToken` /
+  `mySecret` / `userPassword`, and the public-audit-handle safelist
+  for compound IDs and prefixes (`apiKeyId`, `api_key_id`,
+  `api-key-id`, `apiKeyPrefix`, `api_key_prefix`).
 - 2 end-to-end tests for `captureRequestSnippet` and
   `captureResponseSnippet` to ensure the whole snippet capture
   pipeline applies the redaction.
@@ -864,9 +880,9 @@ expects) covers the contract:
 ### Coverage
 
 `bun run coverage` reports `src/logging/redaction.ts` at **100% funcs
-/ 88.68% lines** (uncovered lines are pre-existing
+/ 89.57% lines** (uncovered lines are pre-existing
 `[omitted:payload_too_large]` and content-length parsing edge paths,
-unrelated to Task 6). Gateway overall: **95.22% funcs / 93.19%
+unrelated to Task 6). Gateway overall: **95.22% funcs / 93.21%
 lines**. Above ADR-001 80% floor.
 
 ## Gateway Access Logging (GATEWAY-AUDIT-1)
