@@ -23,9 +23,7 @@ export interface CreateAppOptions {
   routeRepository?: RouteRepository;
 }
 
-export const createApp = async (
-  options: CreateAppOptions = {},
-) => {
+export const createApp = async (options: CreateAppOptions = {}) => {
   const app = new Hono();
 
   // CORS (development-friendly defaults)
