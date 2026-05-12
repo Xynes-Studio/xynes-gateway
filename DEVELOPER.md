@@ -1589,6 +1589,20 @@ When JSON parsing fails, the gateway returns 400 with a **safe, non-leaky** erro
 
 Note: Error messages never include internal details like stack traces or parse positions.
 
+### Bodyless Requests (BE-GW-BUG-001, 2026-05-12)
+
+The gateway accepts spec-compliant bodyless requests on every HTTP method, including `DELETE`, `POST`, `PUT`, and `PATCH`. Specifically:
+
+- A request whose `request.body` is `null` (the Fetch spec signal for "no body at all" — emitted by every browser `fetch(url, { method: "DELETE" })` call that omits `body`) is treated as a **zero-byte body** and falls through to the matched handler. The gateway does **not** require a `Content-Length: 0` header in this case.
+- A request that **does** present a stream-typed body but no `Content-Length` is read from a `request.clone()` up to `maxBodyBytes + 1` bytes. If the stream produces more than `maxBodyBytes` bytes, the gateway returns the same `413 PAYLOAD_TOO_LARGE` envelope as a declared-Content-Length-over-limit request. The original `request.body` is preserved so `proxyRequest` can still forward it to the downstream service.
+- A request with a malformed `Content-Length` value (non-numeric, negative, or overflow) still returns `400 INVALID_CONTENT_LENGTH`.
+- A request with a numeric `Content-Length` greater than the route's `max_body_bytes` still returns `413 PAYLOAD_TOO_LARGE`.
+- A request with a numeric `Content-Length > 0` against a route configured for `max_body_bytes = 0` still returns `413 BODY_NOT_ALLOWED`.
+
+Prior to BE-GW-BUG-001 the gateway returned `411 Length Required` for **any** non-GET/HEAD/OPTIONS request without a `Content-Length` header. That broke every frontend that called a DELETE / bodyless POST via the browser `fetch()` API (which does not auto-emit `Content-Length` for a bodyless request). The `CONTENT_LENGTH_REQUIRED` error code and `411` status are no longer emitted by this code path; existing 413/400 protections are preserved.
+
+Source: `src/router/dynamicRouter.ts` `checkBodyLimit`. Tests: `src/tests/integration.test.ts` → `Body Size Limits (SEC-BODYLIMIT-1)` → `BE-GW-BUG-001 — bodyless requests` (5 cases: bodyless DELETE allowed, bodyless POST allowed, `PAYLOAD_TOO_LARGE` regression guard, `INVALID_CONTENT_LENGTH` regression guard, streaming-body bypass guard).
+
 ### Request Flow
 
 1. **Authorization**: Request is first authenticated/authorized

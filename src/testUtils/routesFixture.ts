@@ -195,4 +195,32 @@ export const TEST_ROUTES: Route[] = [
     workspaceScoped: true,
     isPublic: false,
   },
+  // BE-GW-BUG-001: Bodyless DELETE/POST coverage. These mirror the real
+  // workspace-admin integration routes that triggered the 411 regression
+  // (see xynes-front-end/infra/docs/backlog/archive/bugs-archive.md once
+  // archived). We add them here so the body-limit integration tests can
+  // exercise the spec-compliant bodyless-request path without depending
+  // on any specific maxBodyBytes config (these route IDs are intentionally
+  // absent from getDefaultBodyLimitConfigs(), so they fall back to
+  // DEFAULT_MAX_BODY_BYTES = 1 MB).
+  {
+    id: "domains-delete-1",
+    method: "DELETE",
+    pathPattern: "/workspaces/:workspaceId/domains/:domainId",
+    targetPath: "/workspaces/:workspaceId/domains/:domainId",
+    serviceKey: "accounts-service",
+    actionKey: "platform.domains.delete",
+    workspaceScoped: true,
+    isPublic: false,
+  },
+  {
+    id: "domains-verify-1",
+    method: "POST",
+    pathPattern: "/workspaces/:workspaceId/domains/:domainId/verify",
+    targetPath: "/workspaces/:workspaceId/domains/:domainId/verify",
+    serviceKey: "accounts-service",
+    actionKey: "platform.domains.verify",
+    workspaceScoped: true,
+    isPublic: false,
+  },
 ];
