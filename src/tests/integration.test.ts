@@ -1703,5 +1703,253 @@ describe("Gateway Integration", () => {
 
       expect(res.status).toBe(200);
     });
+
+    /**
+     * BE-GW-BUG-001: Bodyless DELETE/POST must not be rejected with 411.
+     *
+     * Browser `fetch(url, { method: "DELETE" })` does not auto-emit a
+     * Content-Length header. Before BE-GW-BUG-001 we returned 411 in this
+     * case, which broke every frontend that called a workspace-admin
+     * DELETE/POST route without an explicit body. The fix: treat an
+     * absent body (request.body === null) as a zero-byte body and let it
+     * through. Existing PAYLOAD_TOO_LARGE / INVALID_CONTENT_LENGTH paths
+     * stay intact.
+     */
+    describe("BE-GW-BUG-001 — bodyless requests", () => {
+      it("allows a bodyless DELETE with no Content-Length header (200, reaches downstream)", async () => {
+        const app = await createTestApp();
+        const token = signHs256ForTest(
+          { sub: "user-1", exp: 2_000_000_000 },
+          "test-jwt-secret",
+        );
+
+        let downstreamWasCalled = false;
+        global.fetch = vi.fn((url: string | URL | Request) => {
+          const urlStr = url.toString();
+          if (urlStr.includes("/authz/check")) {
+            return Promise.resolve(
+              new Response(
+                JSON.stringify({ ok: true, data: { allowed: true } }),
+                { status: 200 },
+              ),
+            );
+          }
+          if (urlStr.includes("/internal/accounts-actions")) {
+            downstreamWasCalled = true;
+            return Promise.resolve(
+              new Response(JSON.stringify({ ok: true, data: null }), {
+                status: 200,
+              }),
+            );
+          }
+          if (urlStr.includes("/internal/telemetry-actions")) {
+            return Promise.resolve(
+              new Response(JSON.stringify({ id: "evt-1" }), { status: 201 }),
+            );
+          }
+          return Promise.reject(new Error(`Unexpected URL: ${urlStr}`));
+        }) as unknown as typeof fetch;
+
+        // Mirrors `fetch(url, { method: "DELETE" })` from the browser:
+        // no Content-Length, no body, no Content-Type.
+        const res = await app.request("/workspaces/workspace-1/domains/dom-1", {
+          method: "DELETE",
+          headers: { Authorization: `Bearer ${token}` },
+        });
+
+        expect(res.status).toBe(200);
+        expect(downstreamWasCalled).toBe(true);
+      });
+
+      it("allows a bodyless POST with no Content-Length header (200, reaches downstream)", async () => {
+        const app = await createTestApp();
+        const token = signHs256ForTest(
+          { sub: "user-1", exp: 2_000_000_000 },
+          "test-jwt-secret",
+        );
+
+        let downstreamWasCalled = false;
+        global.fetch = vi.fn((url: string | URL | Request) => {
+          const urlStr = url.toString();
+          if (urlStr.includes("/authz/check")) {
+            return Promise.resolve(
+              new Response(
+                JSON.stringify({ ok: true, data: { allowed: true } }),
+                { status: 200 },
+              ),
+            );
+          }
+          if (urlStr.includes("/internal/accounts-actions")) {
+            downstreamWasCalled = true;
+            return Promise.resolve(
+              new Response(JSON.stringify({ ok: true, data: null }), {
+                status: 200,
+              }),
+            );
+          }
+          if (urlStr.includes("/internal/telemetry-actions")) {
+            return Promise.resolve(
+              new Response(JSON.stringify({ id: "evt-1" }), { status: 201 }),
+            );
+          }
+          return Promise.reject(new Error(`Unexpected URL: ${urlStr}`));
+        }) as unknown as typeof fetch;
+
+        // Mirrors `fetch(url, { method: "POST" })` with no body — e.g.
+        // POST .../domains/:domainId/verify.
+        const res = await app.request(
+          "/workspaces/workspace-1/domains/dom-1/verify",
+          {
+            method: "POST",
+            headers: { Authorization: `Bearer ${token}` },
+          },
+        );
+
+        expect(res.status).toBe(200);
+        expect(downstreamWasCalled).toBe(true);
+      });
+
+      it("still returns 413 PAYLOAD_TOO_LARGE for an oversized body that DOES declare Content-Length (regression guard)", async () => {
+        const app = await createTestApp();
+        const token = signHs256ForTest(
+          { sub: "user-1", exp: 2_000_000_000 },
+          "test-jwt-secret",
+        );
+
+        global.fetch = vi.fn((url: string | URL | Request) => {
+          const urlStr = url.toString();
+          if (urlStr.includes("/authz/check")) {
+            return Promise.resolve(
+              new Response(
+                JSON.stringify({ ok: true, data: { allowed: true } }),
+                { status: 200 },
+              ),
+            );
+          }
+          return Promise.reject(new Error(`Unexpected URL: ${urlStr}`));
+        }) as unknown as typeof fetch;
+
+        // Route 5 (comments create) has a 16 KB SMALL limit.
+        const largeBody = JSON.stringify({ content: "x".repeat(20_000) });
+
+        const res = await app.request(
+          "/workspaces/ws-1/content-entries/entry-1/comments",
+          {
+            method: "POST",
+            body: largeBody,
+            headers: {
+              "Content-Type": "application/json",
+              "Content-Length": String(largeBody.length),
+              Authorization: `Bearer ${token}`,
+            },
+          },
+        );
+
+        expect(res.status).toBe(413);
+        const body = (await res.json()) as {
+          ok: boolean;
+          error?: { code: string };
+        };
+        expect(body.error?.code).toBe("PAYLOAD_TOO_LARGE");
+      });
+
+      it("still returns 400 INVALID_CONTENT_LENGTH for a malformed Content-Length on a POST (regression guard)", async () => {
+        const app = await createTestApp();
+        const token = signHs256ForTest(
+          { sub: "user-1", exp: 2_000_000_000 },
+          "test-jwt-secret",
+        );
+
+        global.fetch = vi.fn((url: string | URL | Request) => {
+          const urlStr = url.toString();
+          if (urlStr.includes("/authz/check")) {
+            return Promise.resolve(
+              new Response(
+                JSON.stringify({ ok: true, data: { allowed: true } }),
+                { status: 200 },
+              ),
+            );
+          }
+          return Promise.reject(new Error(`Unexpected URL: ${urlStr}`));
+        }) as unknown as typeof fetch;
+
+        const res = await app.request(
+          "/workspaces/workspace-1/domains/dom-1/verify",
+          {
+            method: "POST",
+            headers: {
+              "Content-Length": "not-a-number",
+              Authorization: `Bearer ${token}`,
+            },
+          },
+        );
+
+        expect(res.status).toBe(400);
+        const body = (await res.json()) as {
+          ok: boolean;
+          error?: { code: string };
+        };
+        expect(body.error?.code).toBe("INVALID_CONTENT_LENGTH");
+      });
+
+      it("rejects a streaming body that exceeds the route limit even when Content-Length is absent (streaming-bypass guard)", async () => {
+        const app = await createTestApp();
+        const token = signHs256ForTest(
+          { sub: "user-1", exp: 2_000_000_000 },
+          "test-jwt-secret",
+        );
+
+        global.fetch = vi.fn((url: string | URL | Request) => {
+          const urlStr = url.toString();
+          if (urlStr.includes("/authz/check")) {
+            return Promise.resolve(
+              new Response(
+                JSON.stringify({ ok: true, data: { allowed: true } }),
+                { status: 200 },
+              ),
+            );
+          }
+          return Promise.reject(new Error(`Unexpected URL: ${urlStr}`));
+        }) as unknown as typeof fetch;
+
+        // Build an explicitly streaming body (ReadableStream). When wired
+        // into a Request without Content-Length, this is the streaming
+        // bypass vector that the SEC-BODYLIMIT-1 invariant must still
+        // block. Route 5 (comments create) has a 16 KB SMALL limit;
+        // we stream ~20 KB.
+        const oversizedChunk = new TextEncoder().encode("x".repeat(20_000));
+        const streamingBody = new ReadableStream({
+          start(controller) {
+            controller.enqueue(oversizedChunk);
+            controller.close();
+          },
+        });
+
+        const req = new Request(
+          "http://localhost/workspaces/ws-1/content-entries/entry-1/comments",
+          {
+            method: "POST",
+            body: streamingBody,
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${token}`,
+            },
+            // `duplex: "half"` is required by Node/undici when `body` is
+            // a stream. It's not yet in the standard `RequestInit` lib.dom
+            // types in this TS version, so we widen the type locally.
+            ...({ duplex: "half" } as Record<string, unknown>),
+          },
+        );
+
+        const res = await app.request(req);
+
+        expect(res.status).toBe(413);
+        const body = (await res.json()) as {
+          ok: boolean;
+          error?: { code: string };
+        };
+        expect(body.error?.code).toBe("PAYLOAD_TOO_LARGE");
+      });
+    });
   });
 });

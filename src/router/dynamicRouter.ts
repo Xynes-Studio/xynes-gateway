@@ -410,9 +410,7 @@ export class DynamicRouter {
     request.auth = { actor };
   }
 
-  private async getAuthResult(
-    request: Request,
-  ): Promise<GatewayAuthResult> {
+  private async getAuthResult(request: Request): Promise<GatewayAuthResult> {
     const holder = request as unknown as Record<
       symbol,
       Promise<GatewayAuthResult> | undefined
@@ -671,10 +669,10 @@ export class DynamicRouter {
     // raw API key is NEVER forwarded — it stays in the resolver.
     const actor = request.auth?.actor;
     const isApiKey = actor?.kind === "api_key";
-    const userId = isApiKey ? null : request.auth?.userId ?? null;
-    const userEmail = isApiKey ? null : request.auth?.email ?? null;
-    const userName = isApiKey ? null : request.auth?.name ?? null;
-    const userAvatarUrl = isApiKey ? null : request.auth?.avatarUrl ?? null;
+    const userId = isApiKey ? null : (request.auth?.userId ?? null);
+    const userEmail = isApiKey ? null : (request.auth?.email ?? null);
+    const userName = isApiKey ? null : (request.auth?.name ?? null);
+    const userAvatarUrl = isApiKey ? null : (request.auth?.avatarUrl ?? null);
     const apiKeyId = isApiKey ? actor.apiKeyId : null;
     const apiKeyPrefix = isApiKey ? actor.keyPrefix : null;
     const reqId = requestId || generateRequestId();
@@ -1050,20 +1048,80 @@ export class DynamicRouter {
       maxBodyBytes = DEFAULT_MAX_BODY_BYTES;
     }
 
-    // SEC-BODYLIMIT-1: Reject requests without Content-Length for non-zero body limits
-    // This prevents streaming bodies from bypassing size validation
+    // BE-GW-BUG-001: When the caller does not declare Content-Length, the
+    // gateway used to fail-fast with 411 Length Required. That broke
+    // every spec-compliant bodyless DELETE/POST (e.g. browser
+    // `fetch(url, { method: "DELETE" })`, which does NOT auto-emit a
+    // Content-Length header). The fix preserves the SEC-BODYLIMIT-1
+    // invariant (streaming bodies cannot bypass size validation) while
+    // accepting genuinely bodyless requests:
+    //
+    //   1. If `request.body === null` (the spec signal for "no body at
+    //      all"), treat as a zero-byte body and let it through.
+    //   2. If `request.body` is a ReadableStream, peek the stream up to
+    //      `maxBodyBytes + 1` bytes from a *clone* (so the original
+    //      request.body remains intact for `proxyRequest` to forward).
+    //      If the peek crosses the limit, return 413 PAYLOAD_TOO_LARGE
+    //      — same posture as a declared Content-Length over the limit.
+    //
+    // Routes with `maxBodyBytes === 0` still fall through to the
+    // existing BODY_NOT_ALLOWED branch below if Content-Length is set
+    // and non-zero; a truly bodyless request against a no-body route is
+    // allowed.
     if (contentLength === null && maxBodyBytes > 0) {
-      const errorResponse = createErrorResponse(
-        "CONTENT_LENGTH_REQUIRED",
-        "Content-Length header is required.",
-        requestId,
-      );
-      return {
-        response: new Response(JSON.stringify(errorResponse), {
-          status: 411, // 411 Length Required
-          headers: { "Content-Type": "application/json" },
-        }),
-      };
+      // Spec: a request with no body has `request.body === null`.
+      if (request.body !== null) {
+        // Streaming body with no Content-Length — enforce the limit by
+        // reading bytes from a clone, bounded at maxBodyBytes + 1.
+        let streamedBytes = 0;
+        let exceededLimit = false;
+        try {
+          const reader = request.clone().body?.getReader();
+          if (reader) {
+            // Read until the stream ends OR we've crossed the limit.
+            for (;;) {
+              const { done, value } = await reader.read();
+              if (done) break;
+              if (value) {
+                streamedBytes += value.byteLength;
+                if (streamedBytes > maxBodyBytes) {
+                  exceededLimit = true;
+                  // Best-effort cancel — we have everything we need to
+                  // make the deny decision.
+                  try {
+                    await reader.cancel();
+                  } catch {
+                    // Ignore cancel errors; the deny path is unchanged.
+                  }
+                  break;
+                }
+              }
+            }
+          }
+        } catch {
+          // If the body cannot be read for any reason, fall back to the
+          // safe denial path: treat it as oversized rather than letting
+          // an attacker bypass the size check via a malformed stream.
+          exceededLimit = true;
+        }
+
+        if (exceededLimit) {
+          const errorResponse = createErrorResponse(
+            "PAYLOAD_TOO_LARGE",
+            "Request body too large.",
+            requestId,
+          );
+          return {
+            response: new Response(JSON.stringify(errorResponse), {
+              status: 413,
+              headers: { "Content-Type": "application/json" },
+            }),
+          };
+        }
+        // Streamed body fits within the configured limit — fall through.
+      }
+      // Bodyless (request.body === null) or streamed-and-fits — allow.
+      return { response: null };
     }
 
     // If Content-Length is provided, validate against limit
