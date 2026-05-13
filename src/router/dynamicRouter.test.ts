@@ -17,6 +17,8 @@ vi.module("../infra/config", () => ({
       accounts: "http://localhost:3005",
       authz: "http://localhost:3002",
       telemetry: "http://localhost:3004",
+      // STORAGE-3: storage-service URL for proxy resolution tests.
+      storage: "http://localhost:3006",
     },
     // INFRA-BE-1: PostHog Feature Flags (empty key = disabled in tests)
     posthog: {
@@ -506,6 +508,137 @@ describe("DynamicRouter", () => {
         "http://localhost:3004/internal/telemetry-actions",
         expect.any(Object),
       );
+    });
+
+    // STORAGE-3: storage-service proxy
+    //
+    // Source of truth:
+    //   xynes/xynes-infra/docs/plans/2026-05-10-universal-object-storage-file-upload-api.md §7
+    //   xynes/xynes-storage-service/DEVELOPER.md (Internal Route Contract)
+    //
+    // Asserts:
+    //   - serviceKey "storage-service" resolves to config.services.storage.
+    //   - Action endpoint is constructed as
+    //       ${config.services.storage}/internal/storage-actions
+    //     mirroring the cms-core / accounts-service / telemetry-service
+    //     conventions.
+    //   - actionKey + payload are forwarded to the downstream handler.
+    it("should proxy storage-service route to storage-actions endpoint", async () => {
+      const storageRoute: Route = {
+        id: "storage-1",
+        pathPattern: "/workspaces/:workspaceId/storage/uploads",
+        method: "POST",
+        serviceKey: "storage-service",
+        targetPath: "/workspaces/:workspaceId/storage/uploads",
+        workspaceScoped: true,
+        actionKey: "platform.storage.objects.upload",
+      };
+      const match = {
+        route: storageRoute,
+        params: { workspaceId: "ws-1" },
+      };
+      const req = new Request(
+        "http://localhost/workspaces/ws-1/storage/uploads",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            filename: "hero.png",
+            contentType: "image/png",
+            byteSize: 1024,
+            purpose: "cms_media",
+          }),
+          headers: { "Content-Type": "application/json" },
+        },
+      );
+      (req as unknown as { auth?: { userId?: string } }).auth = {
+        userId: "user-1",
+      };
+
+      let capturedUrl = "";
+      let capturedBody: unknown = null;
+      (global.fetch as unknown as MockFn).mockImplementation(
+        async (url: string, init?: RequestInit) => {
+          capturedUrl = url;
+          capturedBody = JSON.parse(String(init?.body || "{}"));
+          return new Response(
+            JSON.stringify({
+              uploadId: "u-1",
+              objectId: "o-1",
+              object: { id: "o-1", status: "pending_upload" },
+            }),
+            { status: 201 },
+          );
+        },
+      );
+
+      const response = await router.proxyRequest(match, req, {});
+      expect(response.status).toBe(201);
+      expect(capturedUrl).toBe(
+        "http://localhost:3006/internal/storage-actions",
+      );
+      const body = capturedBody as {
+        actionKey?: string;
+        payload?: Record<string, unknown>;
+      };
+      expect(body.actionKey).toBe("platform.storage.objects.upload");
+      // workspaceId is forwarded via the X-Workspace-Id header (see
+      // buildInternalHeaders), NOT via payload — same convention as
+      // accounts-service / cms-core / telemetry-service. The body
+      // payload here is the parsed request body merged with non-
+      // workspace path params (none for this route).
+      expect(body.payload).toMatchObject({
+        filename: "hero.png",
+        contentType: "image/png",
+        byteSize: 1024,
+        purpose: "cms_media",
+      });
+      // Defense in depth: workspaceId MUST NOT leak into the action payload.
+      expect(
+        (body.payload as Record<string, unknown> | undefined)?.workspaceId,
+      ).toBeUndefined();
+    });
+
+    // STORAGE-3: storage-service unknown when env unset (fail closed posture)
+    //
+    // The plan documents that when STORAGE_SERVICE_URL is unset, storage
+    // routes must fail closed (NOT silently return 200). The unknown
+    // service URL path is exercised by the existing "unknown serviceKey"
+    // case; here we assert that storage-service does NOT fall through to
+    // the generic /internal/actions endpoint — it must explicitly target
+    // /internal/storage-actions, so a misconfigured downstream gives a
+    // clear 502/handler-mismatch signal rather than a silent success.
+    it("storage-service NEVER falls back to the generic /internal/actions endpoint", async () => {
+      const storageRoute: Route = {
+        id: "storage-2",
+        pathPattern: "/workspaces/:workspaceId/storage/objects",
+        method: "GET",
+        serviceKey: "storage-service",
+        targetPath: "/workspaces/:workspaceId/storage/objects",
+        workspaceScoped: true,
+        actionKey: "platform.storage.objects.read",
+      };
+      const match = {
+        route: storageRoute,
+        params: { workspaceId: "ws-1" },
+      };
+      const req = new Request(
+        "http://localhost/workspaces/ws-1/storage/objects",
+      );
+      (req as unknown as { auth?: { userId?: string } }).auth = {
+        userId: "user-1",
+      };
+
+      let capturedUrl = "";
+      (global.fetch as unknown as MockFn).mockImplementation(
+        async (url: string) => {
+          capturedUrl = url;
+          return new Response('{"objects":[]}', { status: 200 });
+        },
+      );
+
+      await router.proxyRequest(match, req, {});
+      expect(capturedUrl.endsWith("/internal/storage-actions")).toBe(true);
+      expect(capturedUrl.endsWith("/internal/actions")).toBe(false);
     });
 
     it("should return 500 if route misconfigured", async () => {

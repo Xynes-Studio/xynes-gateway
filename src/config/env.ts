@@ -22,6 +22,13 @@ export const config = {
     accounts: process.env.ACCOUNTS_SERVICE_URL!,
     authz: process.env.AUTHZ_SERVICE_URL!,
     telemetry: process.env.TELEMETRY_SERVICE_URL!,
+    // STORAGE-3: Universal Object Storage service URL.
+    // Set via STORAGE_SERVICE_URL env var. Not required at boot — the
+    // gateway only resolves it lazily when a route row targets
+    // service_key='storage-service'. When unset and a storage route is
+    // matched, the dynamic router fails closed with 502 BAD_GATEWAY,
+    // matching the posture for unknown service keys.
+    storage: process.env.STORAGE_SERVICE_URL!,
   },
   // INFRA-BE-1: PostHog Feature Flags
   posthog: {
