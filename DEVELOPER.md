@@ -1146,6 +1146,7 @@ The Dynamic Router implements a "Smart Proxy" pattern:
    - `cms-core` -> `${CMS_CORE_URL}/internal/cms-actions`
    - `accounts-service` -> `${ACCOUNTS_SERVICE_URL}/internal/accounts-actions`
    - `telemetry-service` -> `${TELEMETRY_SERVICE_URL}/internal/telemetry-actions`
+   - `storage-service` -> `${STORAGE_SERVICE_URL}/internal/storage-actions` (STORAGE-3; the storage-service container itself ships in STORAGE-4 — until then, any matched `/workspaces/:workspaceId/storage/*` route fails closed with `502 BAD_GATEWAY` because `STORAGE_SERVICE_URL` is unset)
 4. **Payload Construction**: Builds a single JSON payload object by merging request JSON body + query + path params (path params win; `workspaceId` is header-only).
 5. **Telemetry**: Asynchronously records request tracking.
 
@@ -1217,6 +1218,7 @@ The gateway signs short-lived HS256 JWTs for service-to-service authentication, 
 | authz-service | `authz-service` |
 | telemetry-service | `telemetry-service` |
 | accounts-service | `accounts-service` |
+| storage-service | `storage-service` |
 
 #### Security Properties
 

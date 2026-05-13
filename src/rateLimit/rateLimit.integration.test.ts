@@ -20,6 +20,8 @@ vi.module("../infra/config", () => ({
       accounts: "http://localhost:3005",
       authz: "http://localhost:3002",
       telemetry: "http://localhost:3004",
+      // STORAGE-3: storage-service URL placeholder for tests.
+      storage: "http://localhost:3006",
     },
     // INFRA-BE-1: PostHog Feature Flags (empty key = disabled in tests)
     posthog: {

@@ -19,6 +19,8 @@ vi.module("../infra/config", () => ({
       cms: "http://cms.local",
       authz: "http://authz.local",
       telemetry: "http://telemetry.local",
+      // STORAGE-3: storage-service URL placeholder for tests.
+      storage: "http://storage.local",
     },
     // INFRA-BE-1: PostHog Feature Flags (empty key = disabled in tests)
     posthog: {

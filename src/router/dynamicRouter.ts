@@ -716,6 +716,13 @@ export class DynamicRouter {
       case "telemetryservice":
         serviceUrl = config.services.telemetry;
         break;
+      // STORAGE-3: Universal Object Storage service.
+      // Routes under /workspaces/:workspaceId/storage/* target this.
+      case "storage_service":
+      case "storage-service":
+      case "storageservice":
+        serviceUrl = config.services.storage;
+        break;
       default: {
         console.error(`[DynamicRouter] Unknown serviceKey: ${serviceKey}`);
         const unknownServiceError = createErrorResponse(
@@ -761,6 +768,15 @@ export class DynamicRouter {
       serviceKeyNormalized === "telemetryservice"
     ) {
       actionEndpoint = `${serviceUrl}/internal/telemetry-actions`;
+    } else if (
+      // STORAGE-3: Universal Object Storage internal action endpoint.
+      // Matches the convention documented in
+      // xynes/xynes-storage-service/DEVELOPER.md (Internal Route Contract).
+      serviceKeyNormalized === "storage_service" ||
+      serviceKeyNormalized === "storage-service" ||
+      serviceKeyNormalized === "storageservice"
+    ) {
+      actionEndpoint = `${serviceUrl}/internal/storage-actions`;
     } else {
       // Generic fallback or specific?
       actionEndpoint = `${serviceUrl}/internal/actions`;
