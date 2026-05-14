@@ -25,6 +25,8 @@ const ALLOWED_SERVICE_KEYS = new Set([
   "doc-service",
   "cms-core",
   "telemetry-service",
+  // STORAGE-3: Universal Object Storage service.
+  "storage-service",
 ]);
 
 const ACTION_KEY_PATTERN =
