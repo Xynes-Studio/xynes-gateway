@@ -110,7 +110,7 @@ export const PUBLIC_FLAG_KEYS: string[] = [
  * Filters to only PUBLIC_FLAG_KEYS.
  */
 export function filterPublicFlags(
-  flags: Record<string, boolean>
+  flags: Record<string, boolean>,
 ): Record<string, boolean> {
   const publicFlags: Record<string, boolean> = {};
   for (const key of PUBLIC_FLAG_KEYS) {
