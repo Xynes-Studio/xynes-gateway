@@ -11,7 +11,11 @@
  */
 
 import { describe, it, expect, mock, beforeEach } from "bun:test";
-import { DEFAULT_FLAGS, type FeatureFlagContext } from "./types";
+import {
+  DEFAULT_FLAGS,
+  PUBLIC_FLAG_KEYS,
+  type FeatureFlagContext,
+} from "./types";
 
 // Mock PostHog at module level
 const mockIsFeatureEnabled = mock(() => Promise.resolve(true));
@@ -373,5 +377,15 @@ describe("DEFAULT_FLAGS", () => {
     for (const key of expectedKeys) {
       expect(DEFAULT_FLAGS).toHaveProperty(key);
     }
+  });
+
+  // STORAGE-LIVE-5: per-PR security invariants for `cms_editor_storage_uploads`.
+  // Plan: xynes-infra/docs/plans/2026-05-14-storage-live-provider-rollout.md §8.
+  it("should default cms_editor_storage_uploads to false (conservative default)", () => {
+    expect(DEFAULT_FLAGS.cms_editor_storage_uploads).toBe(false);
+  });
+
+  it("should NOT expose cms_editor_storage_uploads via PUBLIC_FLAG_KEYS (JWT + workspace context required)", () => {
+    expect(PUBLIC_FLAG_KEYS).not.toContain("cms_editor_storage_uploads");
   });
 });
