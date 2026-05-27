@@ -65,6 +65,13 @@ export const DEFAULT_FLAGS: Record<string, boolean> = {
   xynes_workspace_creation: true,
   xynes_auth_dashboard_apps_v1: false,
 
+  // CMS features
+  // STORAGE-LIVE-5: gate the CMS editor's inline storage-upload affordance.
+  // Default OFF until each workspace's rollout checklist (live smoke + DOM
+  // sweep) is green; flip ON per-workspace via PostHog admin.
+  // Owner plan: xynes-infra/docs/plans/2026-05-14-storage-live-provider-rollout.md §8.
+  cms_editor_storage_uploads: false,
+
   // Security/Operational
   xynes_maintenance_mode: false,
 };

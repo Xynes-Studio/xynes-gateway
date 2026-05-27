@@ -365,6 +365,8 @@ describe("DEFAULT_FLAGS", () => {
       "xynes_workspace_switching",
       "xynes_workspace_creation",
       "xynes_auth_dashboard_apps_v1",
+      // STORAGE-LIVE-5: CMS editor storage uploads flag.
+      "cms_editor_storage_uploads",
       "xynes_maintenance_mode",
     ];
 
