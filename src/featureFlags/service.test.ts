@@ -232,12 +232,79 @@ describe("FeatureFlagService", () => {
 
         await service.getAllFlags(testContext);
 
-        expect(mockGetAllFlags).toHaveBeenCalledWith("user-123", {
-          personProperties: {
-            workspaceId: "ws-456",
-            plan: "pro",
-          },
+        expect(mockGetAllFlags).toHaveBeenCalledWith(
+          "user-123",
+          expect.objectContaining({
+            personProperties: expect.objectContaining({
+              workspaceId: "ws-456",
+              plan: "pro",
+            }),
+          }),
+        );
+      });
+
+      // BUG-CMS-5: workspace-scoped flag rollouts in PostHog admin require
+      // the gateway to forward the active workspace as a PostHog `group`
+      // (https://posthog.com/docs/feature-flags/group-feature-flags), not
+      // just as a person property. Without this, a workspace-targeted
+      // release condition silently returns the default value.
+      it("BUG-CMS-5: getAllFlags forwards workspaceId as PostHog group + groupProperties", async () => {
+        mockGetAllFlags.mockImplementation(() => Promise.resolve({}));
+
+        await service.getAllFlags(testContext);
+
+        expect(mockGetAllFlags).toHaveBeenCalledWith(
+          "user-123",
+          expect.objectContaining({
+            groups: { workspace: "ws-456" },
+            groupProperties: { workspace: { id: "ws-456" } },
+          }),
+        );
+      });
+
+      it("BUG-CMS-5: getAllFlags omits groups when workspaceId is absent (anonymous / pre-workspace)", async () => {
+        mockGetAllFlags.mockImplementation(() => Promise.resolve({}));
+        const anonymousContext: FeatureFlagContext = { userId: "anonymous" };
+
+        await service.getAllFlags(anonymousContext);
+
+        const callArgs = mockGetAllFlags.mock.calls[0];
+        const options = callArgs[1] as {
+          groups?: unknown;
+          groupProperties?: unknown;
+        };
+        expect(options.groups).toBeUndefined();
+        expect(options.groupProperties).toBeUndefined();
+      });
+
+      it("BUG-CMS-5: getAllFlags preserves personProperties.workspaceId alongside groups (backward compat)", async () => {
+        mockGetAllFlags.mockImplementation(() => Promise.resolve({}));
+
+        await service.getAllFlags(testContext);
+
+        const callArgs = mockGetAllFlags.mock.calls[0];
+        const options = callArgs[1] as {
+          personProperties?: Record<string, string>;
+        };
+        expect(options.personProperties).toMatchObject({
+          workspaceId: "ws-456",
+          plan: "pro",
         });
+      });
+
+      it("BUG-CMS-5: getFlag forwards workspaceId as PostHog group + groupProperties", async () => {
+        mockIsFeatureEnabled.mockImplementation(() => Promise.resolve(true));
+
+        await service.getFlag("cms_editor_storage_uploads", testContext);
+
+        expect(mockIsFeatureEnabled).toHaveBeenCalledWith(
+          "cms_editor_storage_uploads",
+          "user-123",
+          expect.objectContaining({
+            groups: { workspace: "ws-456" },
+            groupProperties: { workspace: { id: "ws-456" } },
+          }),
+        );
       });
 
       it("should filter out non-boolean values from PostHog response", async () => {

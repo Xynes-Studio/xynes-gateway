@@ -81,6 +81,50 @@ export class FeatureFlagService implements IFeatureFlagService {
   }
 
   /**
+   * BUG-CMS-5: Build PostHog evaluation options that include BOTH
+   * person-level properties (backward compat with any existing person-
+   * scoped rollout conditions) AND group-level targeting on the
+   * `workspace` group (the canonical PostHog way to drive per-workspace
+   * release conditions from the PostHog admin UI).
+   *
+   * When `workspaceId` is absent, no group is sent (anonymous /
+   * pre-workspace path); PostHog falls back to person-only evaluation.
+   *
+   * Reference:
+   *   https://posthog.com/docs/feature-flags/group-feature-flags
+   */
+  private buildEvaluationOptions(context: FeatureFlagContext): {
+    personProperties: Record<string, string>;
+    groups?: Record<string, string>;
+    groupProperties?: Record<string, Record<string, string>>;
+  } {
+    // PostHog typings narrow person/group properties to string values;
+    // coerce the looser FeatureFlagContext.properties surface here so the
+    // outgoing payload matches.
+    const rawPersonProperties = this.buildPersonProperties(context);
+    const personProperties: Record<string, string> = {};
+    for (const [key, value] of Object.entries(rawPersonProperties)) {
+      if (typeof value === "string") {
+        personProperties[key] = value;
+      } else if (typeof value === "number" || typeof value === "boolean") {
+        personProperties[key] = String(value);
+      }
+    }
+
+    if (!context.workspaceId) {
+      return { personProperties };
+    }
+
+    return {
+      personProperties,
+      groups: { workspace: context.workspaceId },
+      groupProperties: {
+        workspace: { id: context.workspaceId },
+      },
+    };
+  }
+
+  /**
    * Get a single feature flag value.
    */
   async getFlag(
@@ -106,10 +150,10 @@ export class FeatureFlagService implements IFeatureFlagService {
     }
 
     try {
-      const personProperties = this.buildPersonProperties(context);
+      const options = this.buildEvaluationOptions(context);
 
       const result = await this.client.isFeatureEnabled(key, context.userId, {
-        personProperties,
+        ...options,
         sendFeatureFlagEvents: false,
       });
 
@@ -171,10 +215,10 @@ export class FeatureFlagService implements IFeatureFlagService {
     }
 
     try {
-      const personProperties = this.buildPersonProperties(context);
+      const options = this.buildEvaluationOptions(context);
 
       const posthogFlags = await this.client.getAllFlags(context.userId, {
-        personProperties,
+        ...options,
       });
 
       // Merge PostHog flags with a false baseline (PostHog overrides)
