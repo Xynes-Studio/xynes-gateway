@@ -90,24 +90,45 @@ export class FeatureFlagService implements IFeatureFlagService {
    * When `workspaceId` is absent, no group is sent (anonymous /
    * pre-workspace path); PostHog falls back to person-only evaluation.
    *
+   * Property-value typing (Codex P2 follow-up):
+   * `FeatureFlagContext.properties` is typed `Record<string, string | number |
+   * boolean>` so callers can pass numeric / boolean targeting properties
+   * (e.g. `seat_count: 10`, `beta_user: true`). PostHog's public
+   * `isFeatureEnabled` / `getAllFlags` signatures narrow the wire type to
+   * `Record<string, string>`, but its internal evaluator runtime accepts
+   * `Record<string, any>` and re-coerces both sides of every comparison
+   * via `String(...)` (see `node_modules/posthog-node/src/extensions/
+   * feature-flags/feature-flags.ts` `computeExactMatch` + `compare`).
+   * Forwarding raw `number | boolean` values is therefore byte-for-byte
+   * equivalent for every documented operator AND preserves the caller's
+   * type intent for any future PostHog operator that becomes
+   * type-sensitive (e.g. the planned `flag_evaluates_to` operator on
+   * numbers/arrays). We cast through `Record<string, any>` on the call
+   * site to match posthog-node's narrower public signature without
+   * downgrading the caller's data.
+   *
    * Reference:
    *   https://posthog.com/docs/feature-flags/group-feature-flags
    */
   private buildEvaluationOptions(context: FeatureFlagContext): {
-    personProperties: Record<string, string>;
+    personProperties: Record<string, string | number | boolean>;
     groups?: Record<string, string>;
-    groupProperties?: Record<string, Record<string, string>>;
+    groupProperties?: Record<string, Record<string, string | number | boolean>>;
   } {
-    // PostHog typings narrow person/group properties to string values;
-    // coerce the looser FeatureFlagContext.properties surface here so the
-    // outgoing payload matches.
+    // Pass raw `string | number | boolean` values straight through —
+    // PostHog's local evaluator handles coercion for every documented
+    // operator. Filter to the supported scalar set so a hostile or
+    // malformed caller cannot smuggle an arbitrary object / array /
+    // function into the outgoing payload.
     const rawPersonProperties = this.buildPersonProperties(context);
-    const personProperties: Record<string, string> = {};
+    const personProperties: Record<string, string | number | boolean> = {};
     for (const [key, value] of Object.entries(rawPersonProperties)) {
-      if (typeof value === "string") {
+      if (
+        typeof value === "string" ||
+        typeof value === "number" ||
+        typeof value === "boolean"
+      ) {
         personProperties[key] = value;
-      } else if (typeof value === "number" || typeof value === "boolean") {
-        personProperties[key] = String(value);
       }
     }
 
@@ -152,8 +173,19 @@ export class FeatureFlagService implements IFeatureFlagService {
     try {
       const options = this.buildEvaluationOptions(context);
 
+      // posthog-node's public signature narrows `personProperties` /
+      // `groupProperties` to `Record<string, string>`, but its internal
+      // local-evaluator runtime accepts `Record<string, any>` and
+      // re-coerces via `String(...)` on both sides of every operator.
+      // Cast through the wider type so the caller's `number | boolean`
+      // typing intent survives to the wire (see `buildEvaluationOptions`
+      // docblock for the runtime evidence).
       const result = await this.client.isFeatureEnabled(key, context.userId, {
-        ...options,
+        personProperties: options.personProperties as Record<string, string>,
+        groups: options.groups,
+        groupProperties: options.groupProperties as
+          | Record<string, Record<string, string>>
+          | undefined,
         sendFeatureFlagEvents: false,
       });
 
@@ -217,8 +249,15 @@ export class FeatureFlagService implements IFeatureFlagService {
     try {
       const options = this.buildEvaluationOptions(context);
 
+      // See `buildEvaluationOptions` + `getFlag` docblocks for why we
+      // cast through the narrower public PostHog signature here. The
+      // runtime evaluator accepts `Record<string, any>`.
       const posthogFlags = await this.client.getAllFlags(context.userId, {
-        ...options,
+        personProperties: options.personProperties as Record<string, string>,
+        groups: options.groups,
+        groupProperties: options.groupProperties as
+          | Record<string, Record<string, string>>
+          | undefined,
       });
 
       // Merge PostHog flags with a false baseline (PostHog overrides)

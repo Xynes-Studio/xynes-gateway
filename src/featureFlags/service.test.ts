@@ -243,11 +243,6 @@ describe("FeatureFlagService", () => {
         );
       });
 
-      // BUG-CMS-5: workspace-scoped flag rollouts in PostHog admin require
-      // the gateway to forward the active workspace as a PostHog `group`
-      // (https://posthog.com/docs/feature-flags/group-feature-flags), not
-      // just as a person property. Without this, a workspace-targeted
-      // release condition silently returns the default value.
       it("BUG-CMS-5: getAllFlags forwards workspaceId as PostHog group + groupProperties", async () => {
         mockGetAllFlags.mockImplementation(() => Promise.resolve({}));
 
@@ -305,6 +300,107 @@ describe("FeatureFlagService", () => {
             groupProperties: { workspace: { id: "ws-456" } },
           }),
         );
+      });
+
+      // BUG-CMS-5 / Codex P2 regression guard: `FeatureFlagContext.properties`
+      // is typed `Record<string, string | number | boolean>` so a caller can
+      // express e.g. `seat_count: 10` or `beta_user: true`. Forwarding those
+      // values as strings (`"10"` / `"true"`) is byte-for-byte equivalent
+      // for PostHog's documented operators today (its internal evaluator
+      // re-coerces via `String(...)` on both sides — see
+      // `node_modules/posthog-node/src/extensions/feature-flags/feature-flags.ts`
+      // `computeExactMatch` + `compare`), but it downgrades the caller's
+      // type intent and could break future type-sensitive operators (e.g.
+      // the planned `flag_evaluates_to` operator on numbers/arrays).
+      // Forward the raw types so type-sensitive PostHog filters keep
+      // matching as intended.
+      it("BUG-CMS-5: forwards numeric and boolean personProperties without stringifying", async () => {
+        mockGetAllFlags.mockImplementation(() => Promise.resolve({}));
+        mockIsFeatureEnabled.mockImplementation(() => Promise.resolve(true));
+
+        const richContext: FeatureFlagContext = {
+          userId: "user-123",
+          workspaceId: "ws-456",
+          properties: {
+            plan: "pro",
+            seat_count: 10,
+            beta_user: true,
+          },
+        };
+
+        await service.getAllFlags(richContext);
+
+        const getAllArgs = mockGetAllFlags.mock.calls.at(-1);
+        const getAllOptions = getAllArgs?.[1] as
+          | { personProperties?: Record<string, unknown> }
+          | undefined;
+        expect(getAllOptions?.personProperties).toEqual(
+          expect.objectContaining({
+            plan: "pro",
+            seat_count: 10,
+            beta_user: true,
+            workspaceId: "ws-456",
+          }),
+        );
+        // Strict type guards: must be number/boolean, NOT stringified.
+        expect(typeof getAllOptions?.personProperties?.seat_count).toBe(
+          "number",
+        );
+        expect(typeof getAllOptions?.personProperties?.beta_user).toBe(
+          "boolean",
+        );
+
+        await service.getFlag("cms_editor_storage_uploads", richContext);
+
+        const getFlagArgs = mockIsFeatureEnabled.mock.calls.at(-1);
+        const getFlagOptions = getFlagArgs?.[2] as
+          | { personProperties?: Record<string, unknown> }
+          | undefined;
+        expect(typeof getFlagOptions?.personProperties?.seat_count).toBe(
+          "number",
+        );
+        expect(typeof getFlagOptions?.personProperties?.beta_user).toBe(
+          "boolean",
+        );
+      });
+
+      it("BUG-CMS-5: filters out hostile non-scalar personProperty values (regression guard)", async () => {
+        mockGetAllFlags.mockImplementation(() => Promise.resolve({}));
+
+        // Hostile / malformed caller bypasses the FeatureFlagContext type.
+        // The build step must not forward objects / arrays / functions /
+        // null / undefined into the outgoing PostHog payload.
+        const hostileContext = {
+          userId: "user-123",
+          workspaceId: "ws-456",
+          properties: {
+            plan: "pro",
+            seat_count: 10,
+            evil_object: { leaked: "secret" },
+            evil_array: ["a", "b"],
+            evil_null: null,
+            evil_undef: undefined,
+            evil_fn: () => 42,
+          },
+        } as unknown as FeatureFlagContext;
+
+        await service.getAllFlags(hostileContext);
+
+        const callArgs = mockGetAllFlags.mock.calls.at(-1);
+        const options = callArgs?.[1] as
+          | { personProperties?: Record<string, unknown> }
+          | undefined;
+        const personProperties = options?.personProperties ?? {};
+        // Allowed scalars survive.
+        expect(personProperties.plan).toBe("pro");
+        expect(personProperties.seat_count).toBe(10);
+        expect(personProperties.workspaceId).toBe("ws-456");
+        // Non-scalars are dropped.
+        expect(personProperties.evil_object).toBeUndefined();
+        expect(personProperties.evil_array).toBeUndefined();
+        expect(personProperties.evil_null).toBeUndefined();
+        expect(personProperties.evil_undef).toBeUndefined();
+        expect(personProperties.evil_fn).toBeUndefined();
       });
 
       it("should filter out non-boolean values from PostHog response", async () => {
