@@ -94,6 +94,11 @@ export const MAX_USER_AGENT_LENGTH = 256;
 
 /**
  * Fields that MUST NOT be included in telemetry (security).
+ *
+ * MAIL-4 extension: `resendapikey` + `resend_api_key` cover the Resend
+ * mailer's API key field shape. Defense in depth — the mailer never
+ * logs the key on purpose, but a config dump that reaches telemetry
+ * could otherwise leak it.
  */
 export const FORBIDDEN_TELEMETRY_FIELDS = [
   "authorization",
@@ -106,6 +111,8 @@ export const FORBIDDEN_TELEMETRY_FIELDS = [
   "raw_key",
   "keyhash",
   "key_hash",
+  "resendapikey",
+  "resend_api_key",
   "query",
   "queryString",
   "body",
@@ -121,3 +128,18 @@ export const FORBIDDEN_TELEMETRY_FIELDS = [
  * defense-in-depth.
  */
 export const RAW_API_KEY_REDACTION_PATTERN = /xynes_live_[A-Fa-f0-9]{1,}/g;
+
+/**
+ * Pattern matching a raw Resend API key (`re_<base64ish>`).
+ *
+ * MAIL-4 — used by the telemetry sanitizer to redact accidental
+ * occurrences of a raw Resend key in user-controlled string fields.
+ * The accounts-service mailer never passes the key into telemetry on
+ * purpose; this is defense-in-depth.
+ *
+ * The character class matches Resend's documented `re_` prefix
+ * followed by 8+ base64-ish chars (`[A-Za-z0-9_-]`). The 8-char floor
+ * keeps regular `re_` substrings in normal text (e.g. `re_short`)
+ * untouched.
+ */
+export const RAW_RESEND_KEY_REDACTION_PATTERN = /re_[A-Za-z0-9_-]{8,}/g;

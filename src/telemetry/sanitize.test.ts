@@ -418,4 +418,44 @@ describe("Telemetry Sanitization (TELE-GW-1)", () => {
       });
     });
   });
+
+  describe("MAIL-4 — Resend API key redaction", () => {
+    it("redacts a raw Resend key embedded in userAgent", () => {
+      const ua = "MyApp/1.0 (debug=re_abc12345_secrettail)";
+      const out = truncateUserAgent(ua);
+      expect(out).toBeDefined();
+      expect(out).not.toContain("re_abc12345_secrettail");
+      expect(out).toContain("[REDACTED]");
+    });
+
+    it("redacts a Resend key embedded after a xynes_live_ key in userAgent", () => {
+      // Both pattern arms must apply independently. The two redactions
+      // should produce TWO `[REDACTED]` substrings.
+      const ua =
+        "MyApp xyn=xynes_live_aabbccdd11223344556677889900aabbccdd11223344556677889900aabb rs=re_abc12345_secrettail";
+      const out = truncateUserAgent(ua) ?? "";
+      expect(out).not.toContain("xynes_live_");
+      expect(out).not.toContain("re_abc12345_secrettail");
+      expect((out.match(/\[REDACTED\]/g) ?? []).length).toBe(2);
+    });
+
+    it("does NOT redact short `re_` substrings (e.g. `re_short`)", () => {
+      const ua = "MyApp re_short trailing text";
+      const out = truncateUserAgent(ua);
+      expect(out).toBe(ua);
+    });
+
+    it("does NOT match `re` prefix when followed by no underscore", () => {
+      const ua = "regex repeats redirect representation";
+      expect(truncateUserAgent(ua)).toBe(ua);
+    });
+
+    it("FORBIDDEN_TELEMETRY_FIELDS includes the canonical Resend field names", async () => {
+      // The constant documents the field-name allowlist for telemetry
+      // emission. MAIL-4 added the two canonical Resend field shapes.
+      const types = await import("./types");
+      expect(types.FORBIDDEN_TELEMETRY_FIELDS).toContain("resendapikey");
+      expect(types.FORBIDDEN_TELEMETRY_FIELDS).toContain("resend_api_key");
+    });
+  });
 });
