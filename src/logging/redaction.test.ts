@@ -286,3 +286,109 @@ describe("captureResponseSnippet — workspace API key surfaces (Task 6)", () =>
     expect(captured.snippet).toContain("[REDACTED]");
   });
 });
+
+// ──────────────────────────────────────────────────────────────────────────
+// MAIL-4 — Resend API key redaction
+// ──────────────────────────────────────────────────────────────────────────
+
+describe("redactTextSnippet — MAIL-4 Resend API key surfaces", () => {
+  const RESEND_KEY = "re_aabbccdd1122_eeffaabbcc";
+
+  describe("free-text scrubbing (SENSITIVE_TEXT_PATTERN)", () => {
+    it("redacts a raw re_ key embedded inside a non-JSON snippet", () => {
+      const out = redactTextSnippet(`unexpected upstream error: ${RESEND_KEY}`);
+      expect(out).not.toContain(RESEND_KEY);
+      expect(out).toContain("[REDACTED]");
+    });
+
+    it("redacts a raw re_ key embedded inside a JSON value string", () => {
+      const out = redactTextSnippet(
+        JSON.stringify({
+          ok: false,
+          detail: `auth failed: token=${RESEND_KEY}`,
+        }),
+      );
+      expect(out).not.toContain(RESEND_KEY);
+      expect(out).toContain("[REDACTED]");
+    });
+
+    it("redacts multiple re_ keys in the same snippet", () => {
+      const a = "re_aaa11111_bbbbcccc";
+      const b = "re_zzz99999_yyyywwww";
+      const out = redactTextSnippet(`first=${a} second=${b}`);
+      const matches = out.match(/\[REDACTED\]/g);
+      expect(matches?.length).toBe(2);
+      expect(out).not.toContain("re_aaa11111");
+      expect(out).not.toContain("re_zzz99999");
+    });
+
+    it("does NOT redact short `re_` substrings (e.g. `re_short`)", () => {
+      const out = redactTextSnippet("retry with re_short prefix");
+      expect(out).toBe("retry with re_short prefix");
+    });
+
+    it("does NOT redact bare `re` prefix without underscore", () => {
+      const out = redactTextSnippet("repeat regex redirect representation");
+      expect(out).toBe("repeat regex redirect representation");
+    });
+
+    it("redacts both Resend and Xynes raw keys when they coexist", () => {
+      const out = redactTextSnippet(`xyn=${RAW_API_KEY} rs=${RESEND_KEY}`);
+      const matches = out.match(/\[REDACTED\]/g);
+      expect(matches?.length).toBe(2);
+      expect(out).not.toContain("xynes_live_");
+      expect(out).not.toContain(RESEND_KEY);
+    });
+  });
+
+  describe("field-name scrubbing (existing apiKey substring tier covers `resendApiKey`)", () => {
+    it("redacts a `resendApiKey` field", () => {
+      const out = redactTextSnippet(JSON.stringify({ resendApiKey: RESEND_KEY }));
+      expect(out).not.toContain(RESEND_KEY);
+      expect(out).toContain("[REDACTED]");
+    });
+
+    it("redacts a `resend_api_key` field", () => {
+      const out = redactTextSnippet(JSON.stringify({ resend_api_key: RESEND_KEY }));
+      expect(out).not.toContain(RESEND_KEY);
+      expect(out).toContain("[REDACTED]");
+    });
+
+    it("redacts a `resend-api-key` field", () => {
+      const out = redactTextSnippet(JSON.stringify({ "resend-api-key": RESEND_KEY }));
+      expect(out).not.toContain(RESEND_KEY);
+      expect(out).toContain("[REDACTED]");
+    });
+
+    it("PRESERVES `resendMessageId` (public audit handle)", () => {
+      // The Resend response carries `id: <messageId>`. We surface this
+      // as `messageId` in the mailer DTO. It is a public audit handle
+      // (not a secret) and MUST stay readable in operator logs.
+      const out = redactTextSnippet(JSON.stringify({ resendMessageId: "abc-123-not-a-secret" }));
+      expect(out).toContain("abc-123-not-a-secret");
+    });
+
+    it("PRESERVES the string literal `resend` when used as a provider tag", () => {
+      const out = redactTextSnippet(JSON.stringify({ provider: "resend" }));
+      expect(out).toContain('"provider":"resend"');
+    });
+  });
+
+  describe("end-to-end via captureRequestSnippet", () => {
+    it("redacts a re_ key smuggled into a request body", async () => {
+      const body = JSON.stringify({ note: `paid with ${RESEND_KEY}` });
+      const request = new Request("https://x/y", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "content-length": String(Buffer.byteLength(body, "utf8")),
+        },
+        body,
+      });
+      const captured = await captureRequestSnippet(request);
+      expect(captured.snippet).toBeDefined();
+      expect(captured.snippet).not.toContain(RESEND_KEY);
+      expect(captured.snippet).toContain("[REDACTED]");
+    });
+  });
+});

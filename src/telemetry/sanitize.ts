@@ -17,7 +17,11 @@ import type {
   HttpRequestTelemetryMeta,
   TelemetryActorType,
 } from "./types";
-import { MAX_USER_AGENT_LENGTH, RAW_API_KEY_REDACTION_PATTERN } from "./types";
+import {
+  MAX_USER_AGENT_LENGTH,
+  RAW_API_KEY_REDACTION_PATTERN,
+  RAW_RESEND_KEY_REDACTION_PATTERN,
+} from "./types";
 
 /**
  * Salt for IP hashing - prevents rainbow table attacks.
@@ -64,9 +68,10 @@ export function hashClientIp(
 /**
  * Truncates user agent string to maximum allowed length.
  *
- * Also redacts any accidental raw API key (`xynes_live_*`) occurrences as
- * defense-in-depth. The gateway pipeline must never put a raw key here on
- * purpose, but user-agent is user-controlled and could contain anything.
+ * Also redacts any accidental raw API key (`xynes_live_*`) or raw Resend
+ * key (`re_<base64ish>`) occurrences as defense-in-depth. The gateway
+ * pipeline must never put a raw key here on purpose, but user-agent is
+ * user-controlled and could contain anything.
  *
  * @param userAgent - Raw user agent string
  * @returns Truncated, redacted user agent or undefined if empty
@@ -78,7 +83,9 @@ export function truncateUserAgent(
     return undefined;
   }
 
-  const redacted = userAgent.replace(RAW_API_KEY_REDACTION_PATTERN, "[REDACTED]");
+  const redacted = userAgent
+    .replace(RAW_API_KEY_REDACTION_PATTERN, "[REDACTED]")
+    .replace(RAW_RESEND_KEY_REDACTION_PATTERN, "[REDACTED]");
 
   if (redacted.length <= MAX_USER_AGENT_LENGTH) {
     return redacted;

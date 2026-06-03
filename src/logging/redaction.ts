@@ -102,9 +102,14 @@ function isSensitiveKey(key: string): boolean {
  *   must never land in a captured snippet, even when echoed back by a
  *   downstream service inside an otherwise-non-sensitive field. See
  *   PR #33 (CodeRabbit Major).
+ * - MAIL-4: Raw Resend API keys of the form `re_<base64ish>` (8+ chars
+ *   of `[A-Za-z0-9_-]` after the prefix). Defense in depth — the
+ *   accounts-service mailer never echoes the key on purpose, but any
+ *   downstream service that proxies a misconfigured Resend response
+ *   could otherwise leak it through the gateway access-log snippet.
  */
 const SENSITIVE_TEXT_PATTERN =
-  /(bearer\s+[a-z0-9\-._~+/]+=*)|("?(?:authorization|x-internal-service-token|x-xs-api-key|cookie|set-cookie)"?\s*:\s*"[^"]+")|(xynes_live_[a-f0-9]+)|(\$argon2(?:id|i|d)?\$[^\s"']+)/gi;
+  /(bearer\s+[a-z0-9\-._~+/]+=*)|("?(?:authorization|x-internal-service-token|x-xs-api-key|cookie|set-cookie)"?\s*:\s*"[^"]+")|(xynes_live_[a-f0-9]+)|(\$argon2(?:id|i|d)?\$[^\s"']+)|(re_[a-zA-Z0-9_-]{8,})/gi;
 
 function isTextualContent(contentType: string | null): boolean {
   if (!contentType) return false;
