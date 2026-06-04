@@ -27,9 +27,24 @@ export const createApp = async (options: CreateAppOptions = {}) => {
   const app = new Hono();
 
   // CORS (development-friendly defaults)
-  // - If CORS_ORIGINS is set: allow only those origins (comma-separated)
+  // - If GATEWAY_CORS_ALLOWED_ORIGINS is set: allow only those origins (comma-separated, exact match)
   // - Otherwise in non-prod: reflect any origin (useful for local frontend dev)
-  const configuredOrigins = (process.env.CORS_ORIGINS || "")
+  //
+  // Per A3 of the MVP release gap audit + ENVIRONMENTS.md §10:
+  //   Hosted envs MUST set GATEWAY_CORS_ALLOWED_ORIGINS in their .env.<env> file.
+  //   Production fails closed (no origins → no Access-Control-Allow-Origin header).
+  //
+  // Legacy env var CORS_ORIGINS is honoured as a deprecated fallback so a stale
+  // local .env.dev doesn't silently break dev. A single startup WARN fires when
+  // only the legacy var is set, so operators are nudged to migrate.
+  const newEnv = (process.env.GATEWAY_CORS_ALLOWED_ORIGINS || "").trim();
+  const legacyEnv = (process.env.CORS_ORIGINS || "").trim();
+  if (!newEnv && legacyEnv) {
+    console.warn(
+      "[gateway][cors] CORS_ORIGINS is deprecated; rename to GATEWAY_CORS_ALLOWED_ORIGINS (see infra/release/ENVIRONMENTS.md §10)",
+    );
+  }
+  const configuredOrigins = (newEnv || legacyEnv)
     .split(",")
     .map((o) => o.trim())
     .filter(Boolean);
@@ -54,6 +69,9 @@ export const createApp = async (options: CreateAppOptions = {}) => {
         "X-XS-Workspace-Id",
         // Core gateway routes use X-Workspace-Id for workspace-scoped actions.
         "X-Workspace-Id",
+        // Workspace API key auth (PFU-1..6). Browser-side public-API consumers
+        // may send this; preflight must list it.
+        "X-XS-API-Key",
       ],
     }),
   );

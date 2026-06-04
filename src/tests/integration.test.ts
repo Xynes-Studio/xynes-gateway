@@ -136,6 +136,129 @@ describe("Gateway Integration", () => {
     expect(allowHeaders).toContain("x-csrf-token");
   });
 
+  describe("CORS allowlist (A3 — GATEWAY_CORS_ALLOWED_ORIGINS)", () => {
+    const originalGatewayCors = process.env.GATEWAY_CORS_ALLOWED_ORIGINS;
+    const originalLegacyCors = process.env.CORS_ORIGINS;
+    const originalNodeEnv = process.env.NODE_ENV;
+
+    const restoreEnv = () => {
+      if (originalGatewayCors === undefined) {
+        delete process.env.GATEWAY_CORS_ALLOWED_ORIGINS;
+      } else {
+        process.env.GATEWAY_CORS_ALLOWED_ORIGINS = originalGatewayCors;
+      }
+      if (originalLegacyCors === undefined) {
+        delete process.env.CORS_ORIGINS;
+      } else {
+        process.env.CORS_ORIGINS = originalLegacyCors;
+      }
+      if (originalNodeEnv === undefined) {
+        delete process.env.NODE_ENV;
+      } else {
+        process.env.NODE_ENV = originalNodeEnv;
+      }
+    };
+
+    afterEach(() => {
+      restoreEnv();
+    });
+
+    it("echoes Access-Control-Allow-Origin for a listed origin", async () => {
+      process.env.GATEWAY_CORS_ALLOWED_ORIGINS =
+        "https://auth.xynes.com,https://cms.xynes.com";
+      const app = await createTestApp();
+      const res = await app.request("/health", {
+        method: "OPTIONS",
+        headers: {
+          Origin: "https://auth.xynes.com",
+          "Access-Control-Request-Method": "GET",
+        },
+      });
+      expect([200, 204]).toContain(res.status);
+      expect(res.headers.get("access-control-allow-origin")).toBe(
+        "https://auth.xynes.com",
+      );
+    });
+
+    it("does NOT echo Access-Control-Allow-Origin for a foreign origin (production posture)", async () => {
+      process.env.GATEWAY_CORS_ALLOWED_ORIGINS =
+        "https://auth.xynes.com,https://cms.xynes.com";
+      process.env.NODE_ENV = "production";
+      const app = await createTestApp();
+      const res = await app.request("/health", {
+        method: "OPTIONS",
+        headers: {
+          Origin: "https://example.com",
+          "Access-Control-Request-Method": "GET",
+        },
+      });
+      // Hono's CORS middleware returns null origin → header MUST NOT be set
+      expect(res.headers.get("access-control-allow-origin")).toBeNull();
+    });
+
+    it("preflight advertises X-XS-API-Key in Access-Control-Allow-Headers", async () => {
+      process.env.GATEWAY_CORS_ALLOWED_ORIGINS = "https://auth.xynes.com";
+      const app = await createTestApp();
+      const res = await app.request("/health", {
+        method: "OPTIONS",
+        headers: {
+          Origin: "https://auth.xynes.com",
+          "Access-Control-Request-Method": "GET",
+          "Access-Control-Request-Headers": "x-xs-api-key",
+        },
+      });
+      const allowHeaders = (
+        res.headers.get("access-control-allow-headers") || ""
+      )
+        .toLowerCase()
+        .split(",")
+        .map((h) => h.trim());
+      expect(allowHeaders).toContain("x-xs-api-key");
+    });
+
+    it("honours the deprecated CORS_ORIGINS fallback and warns once", async () => {
+      delete process.env.GATEWAY_CORS_ALLOWED_ORIGINS;
+      process.env.CORS_ORIGINS = "https://legacy.xynes.com";
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        const app = await createTestApp();
+        const res = await app.request("/health", {
+          method: "OPTIONS",
+          headers: {
+            Origin: "https://legacy.xynes.com",
+            "Access-Control-Request-Method": "GET",
+          },
+        });
+        expect(res.headers.get("access-control-allow-origin")).toBe(
+          "https://legacy.xynes.com",
+        );
+        const warnMessages = warnSpy.mock.calls
+          .map((args) => args.join(" "))
+          .join("\n");
+        expect(warnMessages).toContain("CORS_ORIGINS is deprecated");
+        expect(warnMessages).toContain("GATEWAY_CORS_ALLOWED_ORIGINS");
+      } finally {
+        warnSpy.mockRestore();
+      }
+    });
+
+    it("GATEWAY_CORS_ALLOWED_ORIGINS takes precedence over the legacy CORS_ORIGINS", async () => {
+      process.env.GATEWAY_CORS_ALLOWED_ORIGINS = "https://new.xynes.com";
+      process.env.CORS_ORIGINS = "https://legacy.xynes.com";
+      process.env.NODE_ENV = "production";
+      const app = await createTestApp();
+      const res = await app.request("/health", {
+        method: "OPTIONS",
+        headers: {
+          Origin: "https://legacy.xynes.com",
+          "Access-Control-Request-Method": "GET",
+        },
+      });
+      // Legacy origin must NOT be honoured when the new var is set
+      expect(res.headers.get("access-control-allow-origin")).toBeNull();
+    });
+  });
+
   it("should proxy POST /workspaces/:id/documents to doc-service", async () => {
     const app = await createTestApp();
     const token = signHs256ForTest(
