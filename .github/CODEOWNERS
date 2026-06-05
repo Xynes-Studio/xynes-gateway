@@ -1,0 +1,10 @@
+# Default reviewers for everything
+*                       @REPLACE_WITH_PLATFORM_TEAM
+
+# Specific paths (uncomment what applies)
+# /src/security/          @REPLACE_WITH_SECURITY_TEAM
+# /src/logging/redaction.ts @REPLACE_WITH_SECURITY_TEAM
+# /src/telemetry/         @REPLACE_WITH_SECURITY_TEAM
+# /src/router/            @REPLACE_WITH_PLATFORM_TEAM
+# /src/featureFlags/      @REPLACE_WITH_PLATFORM_TEAM
+# /.github/               @REPLACE_WITH_PLATFORM_TEAM
