@@ -1,10 +1,10 @@
 # Default reviewers for everything
-*                       @REPLACE_WITH_PLATFORM_TEAM
+*                       @archan96
 
 # Specific paths (uncomment what applies)
-# /src/security/          @REPLACE_WITH_SECURITY_TEAM
-# /src/logging/redaction.ts @REPLACE_WITH_SECURITY_TEAM
-# /src/telemetry/         @REPLACE_WITH_SECURITY_TEAM
-# /src/router/            @REPLACE_WITH_PLATFORM_TEAM
-# /src/featureFlags/      @REPLACE_WITH_PLATFORM_TEAM
-# /.github/               @REPLACE_WITH_PLATFORM_TEAM
+# /src/security/          @archan96
+# /src/logging/redaction.ts @archan96
+# /src/telemetry/         @archan96
+# /src/router/            @archan96
+# /src/featureFlags/      @archan96
+# /.github/               @archan96
