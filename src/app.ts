@@ -17,6 +17,7 @@ import { createFlagsRoute } from "./routes/flags.route";
 import { FeatureFlagService } from "./featureFlags";
 import { createRateLimiterFromConfig } from "./infra/rateLimitSetup";
 import { createBodyLimiterFromConfig } from "./infra/bodyLimitSetup";
+import { markRouteTableLoaded } from "./infra/routeTableStatus";
 import type { GatewayRouteMeta } from "./logging/types";
 
 export interface CreateAppOptions {
@@ -181,6 +182,13 @@ export const createApp = async (options: CreateAppOptions = {}) => {
   const routeRepository =
     options.routeRepository ?? createRuntimeRouteRepository();
   const routes = await routeRepository.getRoutes();
+
+  // H-1: signal the route table is loaded so `/health` can report
+  // `checks.route_table = "ok"` without touching the DB. The
+  // PostgresRouteRepository is already fail-closed (it throws on
+  // empty/invalid loads), so reaching this line means the registry is
+  // safe to serve.
+  markRouteTableLoaded(routes.length);
 
   // SEC-RATELIMIT-1: Initialize rate limiter with config repository
   const rateLimiter = createRateLimiterFromConfig();

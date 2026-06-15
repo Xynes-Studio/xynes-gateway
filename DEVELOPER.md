@@ -1638,3 +1638,196 @@ To use Supabase as the JWT authority (recommended), configure RS256 validation v
 - `JWT_AUDIENCE`: optional; set only if your project uses a specific `aud` (when set, gateway enforces it)
 
 On successful validation, the gateway derives `userId` from the JWT `sub` claim and propagates it internally as `X-XS-User-Id`.
+
+---
+
+## Health endpoint (H-1)
+
+Per [`infra/release/HEALTHCHECK-CONTRACT.md`](../xynes-infra/infra/release/HEALTHCHECK-CONTRACT.md). The H-1 story upgraded the gateway's `/health` endpoint to the canonical platform shape so Docker, Compose `depends_on: condition: service_healthy`, Caddy, and Uptime Kuma can all consume it uniformly.
+
+### Contract
+
+- **Path**: `GET /health`
+- **Auth**: NONE (no `Authorization`, no `X-Internal-Service-Token`, no cookies, no API key).
+- **Rate limit**: skipped structurally — `/health` is mounted before the `DynamicRouter` catch-all (`src/app.ts`), so the rate-limit + body-limit middlewares (which live inside `DynamicRouter`) never see it.
+- **Access log**: skipped via `ACCESS_LOG_SKIP_PATHS` in `src/logging/middleware.ts`. `/health` and `/ready` produce **no** console line, **no** access-log dispatch, and **no** telemetry. Regression-guarded by `gatewayLoggingMiddleware — H-1 /health and /ready skip` tests.
+
+### Response shape (200)
+
+```json
+{
+  "ok": true,
+  "service": "xynes-gateway",
+  "version": "v0.1.0",
+  "uptime_seconds": 1234,
+  "checks": {
+    "db": "ok",
+    "route_table": "ok"
+  }
+}
+```
+
+| Field | Source |
+|---|---|
+| `ok` | `true` iff every `checks.*` value is `"ok"` or `"skipped"`. |
+| `service` | Fixed string `"xynes-gateway"`. |
+| `version` | Read from `XYNES_BUILD_VERSION` env at process start; falls back to `"dev"`. |
+| `uptime_seconds` | `Math.floor(process.uptime())`. |
+| `checks.db` | 1-second-timeout `SELECT 1` via `pingDb`. Failures cached as `"fail"` for 30 s to avoid retry storms (HEALTHCHECK-CONTRACT.md §4 cascade avoidance). |
+| `checks.route_table` | `"ok"` iff `platform.routes` was successfully loaded into memory at startup. Set by `markRouteTableLoaded(routes.length)` in `src/app.ts` after `routeRepository.getRoutes()` resolves. Lives in `src/infra/routeTableStatus.ts`. |
+
+### Response shape (503 — degraded)
+
+Same body, `ok: false`, at least one `checks.*` is `"fail"`. The 503 status is what Docker's `HEALTHCHECK`, Caddy, and Uptime Kuma probe; the body is for operator-side `jq` inspection.
+
+### Latency
+
+Soft target ≤ 50 ms p95; hard ceiling ≤ 300 ms p99 per HEALTHCHECK-CONTRACT.md §2.5. The DB probe is bounded by a 1-second `Promise.race` timeout. The route-table check is a frozen in-memory snapshot read — effectively free.
+
+### Forbidden in the response
+
+`/health` MUST NEVER contain:
+
+- `DATABASE_URL`, `JWT_SECRET`, `JWT_PRIVATE_KEY`, secret manager URIs, or any other configuration value.
+- Raw upstream error text (e.g. a postgres `ECONNREFUSED` message). Probe failures are bucketed into the closed-set `"fail"` status; the original error stays inside the probe.
+- Raw API key markers (`xynes_live_*`), AWS keys (`AKIA*`), `X-Amz-Signature=*`, or any other credential pattern.
+- Stack traces, file paths, request IDs, or any user/workspace identifier.
+
+Regression-guarded by `§7.7` and `§7.8` tests in `src/routes/health.route.test.ts`.
+
+### Wiring `XYNES_BUILD_VERSION`
+
+In Compose / K8s, set `XYNES_BUILD_VERSION` to the image's semver tag (or `sha-<7>` for non-tag builds):
+
+```yaml
+environment:
+  - XYNES_BUILD_VERSION=v0.1.0
+```
+
+When unset, `/health` reports `"version": "dev"`.
+
+---
+
+## Production Dockerfile (H-1)
+
+Per [`docs/plans/2026-05-13-mvp-release-stories/group-H-dockerfile-prod-targets.md`](../xynes-infra/docs/plans/2026-05-13-mvp-release-stories/group-H-dockerfile-prod-targets.md). H-1 is the **pioneer story** for the group-H Dockerfile recipe — H-2 through H-7a clone the structure documented here.
+
+### Stages
+
+| Stage | Purpose | Consumer |
+|---|---|---|
+| `base` | Pinned `oven/bun:1-alpine` by digest; shared install context. | Internal. |
+| `dev` | Bind-mount-friendly target with full dev deps + watch mode. | `xynes-infra/docker-compose.dev.yml` (`target: dev`). |
+| `prod` | Hardened runtime: non-root, no devDependencies, no test/docs payload, no `.env*` files, HEALTHCHECK wired against `/health`. | Hosted Dev / QA / Prod compose. |
+
+### Deviations from the canonical group-H skeleton
+
+1. **No `build` stage.** xynes-gateway runs `src/index.ts` directly through Bun's TS support — no compile/bundle step. We keep TypeScript correctness in CI (`bun run typecheck`), not inside the Dockerfile.
+2. **`oven/bun:1-alpine` instead of `oven/bun:1` (debian).** Lands the prod image at **127 MB** (under the < 200 MB story budget). Debian-slim base lands at 253 MB. Bun is statically linked, so musl libc is safe. This becomes the canonical base for H-2 through H-7a.
+3. **`bun run healthcheck` uses `bun -e 'fetch(...)'` instead of `curl`.** Avoids an apt-get/apk layer; relies on Bun's built-in `fetch`.
+
+### Pinning the base image
+
+The base is pinned by **multi-arch manifest-list digest** so both `linux/amd64` (hosted) and `linux/arm64` (Apple Silicon dev) resolve from the same recipe:
+
+```
+FROM oven/bun:1-alpine@sha256:5acc90a93e91ff07bf72aa90a7c9f0fa189765aec90b47bdbf2152d2196383c0 AS base
+```
+
+To refresh the digest (when a new patch tag ships):
+
+```bash
+docker pull oven/bun:1-alpine
+docker buildx imagetools inspect oven/bun:1-alpine | grep '^Digest:'
+```
+
+Update the digest in lockstep across **every** H-* Dockerfile.
+
+### Non-root runtime
+
+```
+RUN addgroup -S -g 1001 xynes && \
+    adduser  -S -u 1001 -G xynes -H xynes
+```
+
+`xynes:1001` is the canonical platform runtime UID — Compose volumes, K8s `securityContext`, and host VPS `/srv/xynes/` ownership all rely on this stable id. Do NOT change without coordinating across the whole platform.
+
+### HEALTHCHECK stanza
+
+```
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
+    CMD bun run healthcheck || exit 1
+```
+
+Matches HEALTHCHECK-CONTRACT.md §5. `start-period=15s` gives Bun time to load `platform.routes` before the probe goes red.
+
+### `bun run healthcheck`
+
+```json
+"healthcheck": "bun -e 'const r=await fetch(`http://127.0.0.1:${process.env.PORT||4100}/health`);process.exit(r.ok?0:1)'"
+```
+
+Exits 0 on HTTP 2xx (`/health` body `ok: true`), non-zero on 503 (degraded) or any network error.
+
+### Local build verification
+
+```bash
+docker buildx build --target prod -t xynesplatform/xynes-gateway:test --load .
+docker image inspect xynesplatform/xynes-gateway:test --format '{{.Config.User}}'              # → xynes
+docker image inspect xynesplatform/xynes-gateway:test --format '{{json .Config.Healthcheck}}'  # → non-null
+docker image inspect xynesplatform/xynes-gateway:test --format '{{.Size}}'                     # → ~127 MB
+docker history xynesplatform/xynes-gateway:test --no-trunc | grep -iE '\.env|secret' || echo OK
+```
+
+End-to-end smoke (requires a reachable Postgres with `platform.routes` seeded):
+
+```bash
+docker run -d --name gw-smoke --network h1-net \
+  -p 4100:4100 \
+  -e PORT=4100 \
+  -e DATABASE_URL=postgres://... \
+  -e XYNES_BUILD_VERSION=v0.1.0-smoke \
+  -e JWT_SECRET=... \
+  xynesplatform/xynes-gateway:test
+
+sleep 15
+curl -s http://127.0.0.1:4100/health | jq .
+# → {"ok": true, "service": "xynes-gateway", "version": "v0.1.0-smoke", ...}
+
+docker inspect gw-smoke --format '{{.State.Health.Status}}'
+# → healthy
+```
+
+### Trivy CVE scan
+
+```bash
+docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
+  aquasec/trivy:latest image --severity HIGH,CRITICAL --exit-code 1 \
+  xynesplatform/xynes-gateway:test
+```
+
+Active waivers are documented in [`CVE-WAIVERS.md`](./CVE-WAIVERS.md). The H-1 baseline scan surfaced 5 pre-existing HIGH findings (none introduced by H-1):
+
+| Package | CVE | Follow-up |
+|---|---|---|
+| `libcrypto3` / `libssl3` (alpine base) | CVE-2026-45447 | `H-1-FU-2` (base image refresh) |
+| `hono` | CVE-2026-22817, CVE-2026-22818, CVE-2026-29045 | `H-1-FU-3` (Hono bump to ^4.12.4) |
+| `@hono/node-server` | CVE-2026-29087 | `H-1-FU-3` (bundled bump to ^1.19.10) |
+
+Each waiver in `CVE-WAIVERS.md` documents why the CVE is not exploitable in our call graph + the remediation path.
+
+### Pre-existing TypeScript debt (H-1-FU-1)
+
+`bun run typecheck` reports **196 lines of pre-existing TS errors** on `develop` that H-1 inherits but did NOT introduce. The errors live in `src/utils/jwt.ts`, `src/data/postgresRouteRepository.ts`, `src/data/postgresWorkspaceApiKeyRepository.ts`, `src/services/proxyService.test.ts`, `src/telemetry/service.test.ts`, `src/tests/integration.test.ts`, `src/tests/internal-auth.stack.test.ts`, `src/utils/jwt.test.ts`, and `src/featureFlags/service.test.ts`. They are unrelated to Dockerfile hardening; gating the prod image on them would block every group-H story behind a debt no H-* story is scoped to fix. Filed as `H-1-FU-1` for a dedicated cleanup PR.
+
+### Rollback
+
+To revert H-1's Dockerfile changes:
+
+```bash
+git revert <H-1 commit>            # restores the dev-only Dockerfile
+# remove the `typecheck` + `healthcheck` scripts from package.json
+# remove .dockerignore and CVE-WAIVERS.md
+```
+
+The `/health` shape upgrade and access-log skip are also revertable independently — see `src/routes/health.route.ts`, `src/infra/routeTableStatus.ts`, and `src/logging/middleware.ts` for the discrete changes.
