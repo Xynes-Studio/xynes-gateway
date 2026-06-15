@@ -375,3 +375,118 @@ describe("gatewayLoggingMiddleware — API key telemetry wiring (Risk 1)", () =>
     consoleSpy.mockRestore();
   });
 });
+
+/**
+ * H-1: access-log skip for liveness/readiness paths.
+ *
+ * HEALTHCHECK-CONTRACT.md §2.6 forbids per-request structured logs for
+ * `/health` (every-30s probe × every probe surface would flood
+ * retention). The middleware must short-circuit BEFORE the console line,
+ * the telemetry emit, and the dispatcher enqueue.
+ */
+describe("gatewayLoggingMiddleware — H-1 /health and /ready skip", () => {
+  let originalAuditFlag: string | undefined;
+  let dispatcher: GatewayLogDispatcher;
+  let dispatcherEnqueue: ReturnType<typeof vi.fn>;
+  let telemetry: IGatewayTelemetryService;
+  let trackHttpRequest: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    originalAuditFlag = process.env.GATEWAY_AUDIT_ENABLED;
+    process.env.GATEWAY_AUDIT_ENABLED = "true";
+
+    dispatcherEnqueue = vi.fn();
+    dispatcher = {
+      enqueue: dispatcherEnqueue,
+    } as unknown as GatewayLogDispatcher;
+
+    trackHttpRequest = vi.fn();
+    telemetry = {
+      trackHttpRequest,
+    };
+  });
+
+  afterEach(() => {
+    if (originalAuditFlag === undefined) {
+      delete process.env.GATEWAY_AUDIT_ENABLED;
+    } else {
+      process.env.GATEWAY_AUDIT_ENABLED = originalAuditFlag;
+    }
+    vi.restoreAllMocks();
+  });
+
+  it("does NOT emit access log or telemetry for GET /health", async () => {
+    const middleware = createGatewayLoggingMiddleware(dispatcher, telemetry);
+    const app = new Hono();
+    app.use("*", middleware);
+    app.get("/health", (c: Context) => c.json({ ok: true }));
+
+    const consoleSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+
+    const res = await app.request("/health");
+    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(res.status).toBe(200);
+    // No structured dispatch, no telemetry track, no per-request
+    // console.log access-log line.
+    expect(dispatcherEnqueue).not.toHaveBeenCalled();
+    expect(trackHttpRequest).not.toHaveBeenCalled();
+    const accessLogLines = consoleSpy.mock.calls.filter((args) => {
+      const first = args[0];
+      return typeof first === "string" && first.includes("GET /health");
+    });
+    expect(accessLogLines).toHaveLength(0);
+    consoleSpy.mockRestore();
+  });
+
+  it("does NOT emit access log or telemetry for GET /ready", async () => {
+    const middleware = createGatewayLoggingMiddleware(dispatcher, telemetry);
+    const app = new Hono();
+    app.use("*", middleware);
+    app.get("/ready", (c: Context) => c.json({ ok: true }));
+
+    const consoleSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+
+    const res = await app.request("/ready");
+    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(res.status).toBe(200);
+    expect(dispatcherEnqueue).not.toHaveBeenCalled();
+    expect(trackHttpRequest).not.toHaveBeenCalled();
+    const accessLogLines = consoleSpy.mock.calls.filter((args) => {
+      const first = args[0];
+      return typeof first === "string" && first.includes("GET /ready");
+    });
+    expect(accessLogLines).toHaveLength(0);
+    consoleSpy.mockRestore();
+  });
+
+  it("DOES emit access log for unrelated paths (regression guard)", async () => {
+    const middleware = createGatewayLoggingMiddleware(dispatcher, telemetry);
+    const app = new Hono();
+    app.use("*", middleware);
+    app.get("/healthcheck-imposter", (c: Context) => c.json({ ok: true }));
+
+    const consoleSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+
+    const res = await app.request("/healthcheck-imposter");
+    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(res.status).toBe(200);
+    // The skip set is exact-match; `/healthcheck-imposter` must NOT be
+    // silently excluded.
+    expect(
+      consoleSpy.mock.calls.some((args) => {
+        const first = args[0];
+        return (
+          typeof first === "string" &&
+          first.includes("GET /healthcheck-imposter")
+        );
+      }),
+    ).toBe(true);
+    consoleSpy.mockRestore();
+  });
+});

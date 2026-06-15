@@ -42,6 +42,10 @@ vi.module("../infra/bodyLimitSetup", () => ({
 const { createApp } = await import("../app");
 const { InMemoryRouteRepository } = await import("../data/routeRepository");
 const { TEST_ROUTES } = await import("../testUtils/routesFixture");
+const { resetHealthRouteCacheForTests } = await import("../routes/health.route");
+const { resetRouteTableStatusForTests } = await import(
+  "../infra/routeTableStatus"
+);
 
 const createTestApp = () =>
   createApp({
@@ -57,6 +61,9 @@ describe("Gateway Integration", () => {
 
   beforeEach(() => {
     pingDbMock.mockReset();
+    // H-1: clear cross-test bleed in the /health module-scoped caches.
+    resetHealthRouteCacheForTests();
+    resetRouteTableStatusForTests();
     global.fetch = vi.fn(() =>
       Promise.resolve(
         new Response(JSON.stringify({ status: "ok" }), { status: 200 }),
@@ -69,12 +76,20 @@ describe("Gateway Integration", () => {
     vi.restoreAllMocks();
   });
 
-  it("GET /health returns 200 OK", async () => {
+  it("GET /health returns 200 OK with the HEALTHCHECK contract shape (H-1)", async () => {
+    pingDbMock.mockResolvedValueOnce(undefined);
     const app = await createTestApp();
     const res = await app.request("/health");
     expect(res.status).toBe(200);
-    const body = await res.json();
-    expect(body).toEqual({ status: "ok", service: "xynes-gateway" });
+    expect(res.headers.get("content-type")).toMatch(/application\/json/);
+    const body = (await res.json()) as Record<string, unknown>;
+    // Contract shape — see infra/release/HEALTHCHECK-CONTRACT.md §2.2.
+    expect(body.ok).toBe(true);
+    expect(body.service).toBe("xynes-gateway");
+    expect(typeof body.version).toBe("string");
+    expect(typeof body.uptime_seconds).toBe("number");
+    expect(Number.isFinite(body.uptime_seconds as number)).toBe(true);
+    expect(body.checks).toMatchObject({ db: "ok", route_table: "ok" });
   });
 
   it("fails startup when DATABASE_URL is missing and no route repository is injected", async () => {

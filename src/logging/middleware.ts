@@ -16,6 +16,19 @@ import { isApiKeyActor, isUserActor } from "../types/requestAuth";
 import { mapStatusToErrorCode } from "../utils/errorMapper";
 import { requestHasApiKeyShape } from "../security/apiKeyAuth";
 
+/**
+ * Liveness/readiness paths excluded from the per-request access log per
+ * HEALTHCHECK-CONTRACT.md §2.6 — keeps the access-log retention from
+ * being flooded by 60-second healthcheck cadence × every probe surface.
+ * Anything that needs to be alerted on (5xx, latency excursions) is
+ * surfaced via the response status itself, not the access log.
+ */
+const ACCESS_LOG_SKIP_PATHS = new Set(["/health", "/ready"]);
+
+function shouldSkipAccessLog(path: string): boolean {
+  return ACCESS_LOG_SKIP_PATHS.has(path);
+}
+
 function parseMaxBytes(raw: string | undefined, fallback: number): number {
   if (!raw) return fallback;
   const parsed = Number.parseInt(raw, 10);
@@ -172,6 +185,13 @@ export function createGatewayLoggingMiddleware(
   const maxResBytes = parseMaxBytes(process.env.GATEWAY_LOG_RES_SNIPPET_MAX, 2048);
 
   return async (c: Context, next: Next): Promise<void> => {
+    // H-1: short-circuit liveness/readiness paths. No console line, no
+    // telemetry, no dispatch — matches HEALTHCHECK-CONTRACT.md §2.6.
+    if (shouldSkipAccessLog(c.req.path)) {
+      await next();
+      return;
+    }
+
     const start = Date.now();
     const requestId = c.get("requestId") || generateRequestId();
     const requestCapturePromise = captureRequestSnippet(c.req.raw, maxReqBytes);
