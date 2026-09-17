@@ -6,6 +6,7 @@
  */
 
 import { config } from "./config";
+import type postgres from "postgres";
 import {
   BodyLimiter,
   CachedBodyLimitConfigRepository,
@@ -62,7 +63,7 @@ export function createBodyLimiterWithStaticConfig(
 async function fetchBodyLimitConfigs(
   databaseUrl: string
 ): Promise<BodyLimitConfigRow[]> {
-  let sql: ReturnType<typeof import("postgres").default> | null = null;
+  let sql: ReturnType<typeof postgres> | null = null;
 
   try {
     const { default: postgres } = await import("postgres");

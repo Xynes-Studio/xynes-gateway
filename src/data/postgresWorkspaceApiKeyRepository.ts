@@ -44,6 +44,7 @@ import type {
   ResolvedWorkspaceApiKey,
   WorkspaceApiKeyRepository,
 } from "../security/apiKeyAuth";
+import type postgres from "postgres";
 
 // ── Row contract ────────────────────────────────────────────────
 
@@ -132,7 +133,7 @@ async function defaultVerifyHash(
  */
 async function withPostgresClient<T>(
   databaseUrl: string,
-  work: (sql: ReturnType<typeof import("postgres").default>) => Promise<T>,
+  work: (sql: ReturnType<typeof postgres>) => Promise<T>,
 ): Promise<T> {
   const { default: postgres } = await import("postgres");
   const sql = postgres(databaseUrl, {

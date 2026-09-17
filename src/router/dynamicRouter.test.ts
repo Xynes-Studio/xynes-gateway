@@ -1,11 +1,11 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from "bun:test";
+import { describe, it, expect, beforeEach, afterEach, vi, mock } from "bun:test";
 import type { Route, RouteMatch } from "../types";
 import type { IAuthzService } from "../services/authzService";
 import { signHs256ForTest } from "../testUtils/jwtTestUtils";
 
 type MockFn = ReturnType<typeof vi.fn>;
 
-vi.module("../infra/config", () => ({
+mock.module("../infra/config", () => ({
   config: {
     internalServiceToken: "test-internal-token",
     auth: {
@@ -31,7 +31,7 @@ vi.module("../infra/config", () => ({
 const { DynamicRouter } = await import("./dynamicRouter");
 
 describe("DynamicRouter", () => {
-  let router: DynamicRouter;
+  let router: InstanceType<typeof DynamicRouter>;
   let mockAuthzService: IAuthzService;
 
   const mockRoutes: Route[] = [

@@ -32,7 +32,7 @@
  * test for "no SQL injection in the lookup path".
  */
 
-import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, mock } from "bun:test";
 
 interface CapturedQuery {
   text: string;
@@ -76,7 +76,7 @@ const fakePostgres: PostgresFactory = (databaseUrl) => {
   return sql;
 };
 
-vi.module("postgres", () => ({ default: fakePostgres }));
+mock.module("postgres", () => ({ default: fakePostgres }));
 
 const { PostgresWorkspaceApiKeyRepository } =
   await import("./postgresWorkspaceApiKeyRepository");

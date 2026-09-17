@@ -6,6 +6,7 @@
  */
 
 import { config } from "./config";
+import type postgres from "postgres";
 import {
   RateLimiter,
   CachedRateLimitConfigRepository,
@@ -70,7 +71,7 @@ export function createRateLimiterWithStaticConfig(
 async function fetchRateLimitConfigs(
   databaseUrl: string
 ): Promise<RateLimitConfigRow[]> {
-  let sql: ReturnType<typeof import("postgres").default> | null = null;
+  let sql: ReturnType<typeof postgres> | null = null;
 
   try {
     const { default: postgres } = await import("postgres");

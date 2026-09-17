@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'bun:test';
+import { describe, it, expect, mock } from 'bun:test';
 
 type SqlLike = ((strings: TemplateStringsArray, ...values: unknown[]) => Promise<unknown[]>) & {
   end: (options?: { timeout?: number }) => Promise<unknown>;
@@ -27,7 +27,7 @@ const fakePostgres: PostgresFactoryLike = (databaseUrl) => {
   return sql;
 };
 
-vi.module('postgres', () => ({ default: fakePostgres }));
+mock.module('postgres', () => ({ default: fakePostgres }));
 
 const { pingDb } = await import('./db');
 
@@ -50,4 +50,3 @@ describe('pingDb', () => {
     expect(callsByUrl.get(url)).toEqual(['select']);
   });
 });
-

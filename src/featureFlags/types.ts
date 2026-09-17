@@ -114,8 +114,9 @@ export function filterPublicFlags(
 ): Record<string, boolean> {
   const publicFlags: Record<string, boolean> = {};
   for (const key of PUBLIC_FLAG_KEYS) {
-    if (key in flags) {
-      publicFlags[key] = flags[key];
+    const value = flags[key];
+    if (value !== undefined) {
+      publicFlags[key] = value;
     }
   }
   return publicFlags;

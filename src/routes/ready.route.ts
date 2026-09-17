@@ -13,7 +13,7 @@ readyRoute.get('/ready', async (c) => {
     workspaceId: null,
     userId: null,
   };
-  c.set("gatewayRouteMeta", routeMeta);
+  c.set("gatewayRouteMeta" as never, routeMeta as never);
 
   try {
     await pingDb(process.env.DATABASE_URL, 'platform');

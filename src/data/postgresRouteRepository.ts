@@ -1,4 +1,5 @@
 import type { Route } from "../types";
+import type postgres from "postgres";
 import type { RouteRepository } from "./routeRepository";
 import {
   assertNoDuplicateMatchers,
@@ -47,7 +48,7 @@ export class PostgresRouteRepository implements RouteRepository {
       );
     }
 
-    let sql: ReturnType<typeof import("postgres").default> | null = null;
+    let sql: ReturnType<typeof postgres> | null = null;
 
     try {
       const { default: postgres } = await import("postgres");

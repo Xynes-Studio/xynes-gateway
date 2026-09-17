@@ -142,7 +142,7 @@ export function createHealthRoute(deps: HealthRouteDeps = {}): Hono {
       workspaceId: null,
       userId: null,
     };
-    c.set('gatewayRouteMeta', routeMeta);
+    c.set('gatewayRouteMeta' as never, routeMeta as never);
 
     const [dbStatus, routeTableStatus] = await Promise.all([
       evaluateDbCheck(pingDb, now),

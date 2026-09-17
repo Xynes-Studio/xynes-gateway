@@ -98,7 +98,7 @@ export const createApp = async (options: CreateAppOptions = {}) => {
       workspaceId: null,
       userId: null,
     };
-    c.set("gatewayRouteMeta", routeMeta);
+    c.set("gatewayRouteMeta" as never, routeMeta as never);
 
     const slug = (c.req.param("slug") || "").toLowerCase();
     if (!slug) return c.json({ available: false }, 400);
@@ -117,9 +117,9 @@ export const createApp = async (options: CreateAppOptions = {}) => {
     const userId = typeof claims?.sub === "string" ? claims.sub : null;
     if (!userId) return c.json({ available: false }, 401);
     routeMeta.userId = userId;
-    c.set("gatewayRouteMeta", routeMeta);
+    c.set("gatewayRouteMeta" as never, routeMeta as never);
 
-    const requestId = (c.get("requestId") as string | undefined) ?? null;
+    const requestId = (c.get("requestId" as never) as string | undefined) ?? null;
     const headers = buildInternalHeaders(c.req.raw.headers, {
       internalServiceToken: config.internalServiceToken,
       internalJwtSigningKey: config.internalJwtSigningKey,

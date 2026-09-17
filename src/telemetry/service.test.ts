@@ -15,7 +15,7 @@ describe("GatewayTelemetryService (TELE-GW-1)", () => {
       status: 201,
       text: () => Promise.resolve("{}"),
     });
-    global.fetch = mockFetch;
+    global.fetch = mockFetch as unknown as typeof fetch;
 
     // Use constructor injection for testability
     service = new GatewayTelemetryService(testTelemetryUrl);
@@ -163,7 +163,7 @@ describe("GatewayTelemetryService (TELE-GW-1)", () => {
         rejectError = new Error("Network error");
         return Promise.reject(rejectError);
       });
-      global.fetch = failingFetch;
+      global.fetch = failingFetch as unknown as typeof fetch;
       const failingService = new GatewayTelemetryService(testTelemetryUrl);
 
       // Suppress console.error for this test
@@ -184,7 +184,7 @@ describe("GatewayTelemetryService (TELE-GW-1)", () => {
       await new Promise((resolve) => setTimeout(resolve, 100));
 
       consoleSpy.mockRestore();
-      global.fetch = mockFetch;
+      global.fetch = mockFetch as unknown as typeof fetch;
     });
 
     it("should log error when telemetry request fails", async () => {
@@ -196,7 +196,7 @@ describe("GatewayTelemetryService (TELE-GW-1)", () => {
       const failingFetch = vi
         .fn()
         .mockRejectedValue(new Error("Network error"));
-      global.fetch = failingFetch;
+      global.fetch = failingFetch as unknown as typeof fetch;
       const failingService = new GatewayTelemetryService(testTelemetryUrl);
 
       failingService.trackHttpRequest(baseInput);
@@ -208,7 +208,7 @@ describe("GatewayTelemetryService (TELE-GW-1)", () => {
       expect(consoleSpy.mock.calls[0]?.[0]).toContain("Network error");
 
       consoleSpy.mockRestore();
-      global.fetch = mockFetch;
+      global.fetch = mockFetch as unknown as typeof fetch;
     });
 
     it("should log error for non-ok response", async () => {
@@ -222,7 +222,7 @@ describe("GatewayTelemetryService (TELE-GW-1)", () => {
         status: 500,
         text: () => Promise.resolve("Internal Server Error"),
       });
-      global.fetch = failingFetch;
+      global.fetch = failingFetch as unknown as typeof fetch;
       const failingService = new GatewayTelemetryService(testTelemetryUrl);
 
       failingService.trackHttpRequest(baseInput);
@@ -233,7 +233,7 @@ describe("GatewayTelemetryService (TELE-GW-1)", () => {
       expect(consoleSpy.mock.calls[0]?.[0]).toContain("500");
 
       consoleSpy.mockRestore();
-      global.fetch = mockFetch;
+      global.fetch = mockFetch as unknown as typeof fetch;
     });
 
     it("should include errorCode in metadata for error responses", async () => {

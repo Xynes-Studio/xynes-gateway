@@ -18,8 +18,18 @@ import {
 } from "./types";
 
 // Mock PostHog at module level
-const mockIsFeatureEnabled = mock(() => Promise.resolve(true));
-const mockGetAllFlags = mock(() => Promise.resolve({}));
+type IsFeatureEnabledMock = (
+  key: string,
+  distinctId: string,
+  options?: unknown,
+) => Promise<boolean | undefined>;
+type GetAllFlagsMock = (
+  distinctId: string,
+  options?: unknown,
+) => Promise<Record<string, unknown>>;
+
+const mockIsFeatureEnabled = mock<IsFeatureEnabledMock>(() => Promise.resolve(true));
+const mockGetAllFlags = mock<GetAllFlagsMock>(() => Promise.resolve({}));
 const mockShutdown = mock(() => Promise.resolve());
 
 mock.module("posthog-node", () => ({
@@ -111,7 +121,7 @@ describe("FeatureFlagService", () => {
 
         expect(result).toEqual({
           key: "xynes_invite_system",
-          enabled: DEFAULT_FLAGS["xynes_invite_system"], // true
+          enabled: DEFAULT_FLAGS["xynes_invite_system"] ?? false, // true
           variant: null,
         });
       });
@@ -155,7 +165,7 @@ describe("FeatureFlagService", () => {
 
         await service.getFlag("xynes_auth_mfa", contextWithoutWorkspace);
 
-        const callArgs = mockIsFeatureEnabled.mock.calls[0];
+        const callArgs = mockIsFeatureEnabled.mock.calls[0]!;
         const personProps = callArgs[2] as {
           personProperties?: Record<string, unknown>;
         };
@@ -263,7 +273,7 @@ describe("FeatureFlagService", () => {
 
         await service.getAllFlags(anonymousContext);
 
-        const callArgs = mockGetAllFlags.mock.calls[0];
+        const callArgs = mockGetAllFlags.mock.calls[0]!;
         const options = callArgs[1] as {
           groups?: unknown;
           groupProperties?: unknown;
@@ -277,7 +287,7 @@ describe("FeatureFlagService", () => {
 
         await service.getAllFlags(testContext);
 
-        const callArgs = mockGetAllFlags.mock.calls[0];
+        const callArgs = mockGetAllFlags.mock.calls[0]!;
         const options = callArgs[1] as {
           personProperties?: Record<string, string>;
         };
@@ -465,7 +475,7 @@ describe("FeatureFlagService", () => {
 
       expect(result).toEqual({
         key: "xynes_auth_mfa",
-        enabled: DEFAULT_FLAGS["xynes_auth_mfa"],
+        enabled: DEFAULT_FLAGS["xynes_auth_mfa"] ?? false,
         variant: null,
       });
       // PostHog should not be called
