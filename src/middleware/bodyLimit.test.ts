@@ -36,7 +36,7 @@ describe("Body Limit Middleware", () => {
 
     // Add request ID middleware
     app.use("*", async (c, next) => {
-      c.set("requestId", "test-request-id");
+      c.set("requestId" as never, "test-request-id" as never);
       return next();
     });
   });

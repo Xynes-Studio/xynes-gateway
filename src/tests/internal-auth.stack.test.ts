@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll, vi } from "bun:test";
+import { describe, it, expect, beforeAll, afterAll, vi, mock } from "bun:test";
 import { Hono } from "hono";
 import type { Context } from "hono";
 import { signHs256ForTest } from "../testUtils/jwtTestUtils";
@@ -8,7 +8,7 @@ const jwtSecret = "stack-jwt-secret";
 const originalGatewayAuditEnabled = process.env.GATEWAY_AUDIT_ENABLED;
 process.env.GATEWAY_AUDIT_ENABLED = "true";
 
-vi.module("../infra/config", () => ({
+mock.module("../infra/config", () => ({
   config: {
     internalServiceToken: token,
     auth: {

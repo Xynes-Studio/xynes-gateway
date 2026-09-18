@@ -74,7 +74,7 @@ describe("flags.route", () => {
         });
 
         expect(res.status).toBe(200);
-        const body = await res.json();
+        const body = (await res.json()) as any;
         expect(body.authenticated).toBe(true);
         expect(body.flags).toEqual(mockFlags);
       });
@@ -119,7 +119,7 @@ describe("flags.route", () => {
         });
 
         expect(res.status).toBe(200);
-        const body = await res.json();
+        const body = (await res.json()) as any;
         expect(body.authenticated).toBe(true);
         expect(body.flags).toBeDefined();
       });
@@ -150,7 +150,7 @@ describe("flags.route", () => {
         const res = await app.request("/flags");
 
         expect(res.status).toBe(200);
-        const body = await res.json();
+        const body = (await res.json()) as any;
         expect(body.authenticated).toBe(false);
 
         // Should only contain public flags
@@ -184,7 +184,7 @@ describe("flags.route", () => {
         });
 
         expect(res.status).toBe(200);
-        const body = await res.json();
+        const body = (await res.json()) as any;
         expect(body.authenticated).toBe(false);
         expect(body.flags.xynes_maintenance_mode).toBe(true);
       });
@@ -203,7 +203,7 @@ describe("flags.route", () => {
         const res = await app.request("/flags");
 
         expect(res.status).toBe(200);
-        const body = await res.json();
+        const body = (await res.json()) as any;
         expect(body.authenticated).toBe(false);
         expect(body.flags).toBeDefined();
       });
@@ -232,7 +232,7 @@ describe("flags.route", () => {
         const res = await app.request(`/flags/${publicFlag}`);
 
         expect(res.status).toBe(200);
-        const body = await res.json();
+        const body = (await res.json()) as any;
         expect(body.key).toBe(publicFlag);
         expect(body.enabled).toBe(true);
       });
@@ -259,7 +259,7 @@ describe("flags.route", () => {
         });
 
         expect(res.status).toBe(200);
-        const body = await res.json();
+        const body = (await res.json()) as any;
         expect(body.enabled).toBe(false);
         expect(body.variant).toBe("v2");
 
@@ -282,7 +282,7 @@ describe("flags.route", () => {
         const res = await app.request(`/flags/${privateFlag}`);
 
         expect(res.status).toBe(401);
-        const body = await res.json();
+        const body = (await res.json()) as any;
         expect(body.ok).toBe(false);
         expect(body.error.code).toBe("UNAUTHORIZED");
       });
@@ -308,7 +308,7 @@ describe("flags.route", () => {
         });
 
         expect(res.status).toBe(200);
-        const body = await res.json();
+        const body = (await res.json()) as any;
         expect(body.key).toBe(privateFlag);
         expect(body.enabled).toBe(true);
       });
@@ -351,7 +351,7 @@ describe("flags.route", () => {
         });
 
         expect(res.status).toBe(200);
-        const body = await res.json();
+        const body = (await res.json()) as any;
         expect(body.enabled).toBe(false);
       });
 
@@ -375,7 +375,7 @@ describe("flags.route", () => {
         });
 
         expect(res.status).toBe(200);
-        const body = await res.json();
+        const body = (await res.json()) as any;
         expect(body.key).toBe("unknownFlag");
         expect(body.enabled).toBe(false);
       });
@@ -397,7 +397,7 @@ describe("flags.route", () => {
 
         // Should return default, not error
         expect(res.status).toBe(200);
-        const body = await res.json();
+        const body = (await res.json()) as any;
         expect(body.key).toBe("xynes_auth_mfa");
         expect(typeof body.enabled).toBe("boolean");
       });

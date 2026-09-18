@@ -1,12 +1,12 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from "bun:test";
+import { describe, it, expect, beforeEach, afterEach, vi, mock } from "bun:test";
 import { signHs256ForTest } from "../testUtils/jwtTestUtils";
 
 const pingDbMock = vi.fn();
-vi.module("../infra/db", () => ({
+mock.module("../infra/db", () => ({
   pingDb: pingDbMock,
 }));
 
-vi.module("../infra/config", () => ({
+mock.module("../infra/config", () => ({
   config: {
     internalServiceToken: "test-internal-token",
     auth: {
@@ -32,7 +32,7 @@ vi.module("../infra/config", () => ({
 // Mock body limit setup to use static config (avoids database dependency)
 const { createBodyLimiterWithStaticConfig, getDefaultBodyLimitConfigs } =
   await import("../infra/bodyLimitSetup");
-vi.module("../infra/bodyLimitSetup", () => ({
+mock.module("../infra/bodyLimitSetup", () => ({
   createBodyLimiterFromConfig: () =>
     createBodyLimiterWithStaticConfig(getDefaultBodyLimitConfigs()),
   createBodyLimiterWithStaticConfig,
@@ -112,7 +112,7 @@ describe("Gateway Integration", () => {
     const app = await createTestApp();
     const res = await app.request("/ready");
     expect(res.status).toBe(200);
-    const body = await res.json();
+    const body = (await res.json()) as any;
     expect(body).toEqual({ status: "ready" });
   });
 
@@ -346,7 +346,7 @@ describe("Gateway Integration", () => {
     const res = await app.request(req);
 
     expect(res.status).toBe(200);
-    const body = await res.json();
+    const body = (await res.json()) as any;
 
     // Assert Envelope Structure
     expect(body).toEqual(
@@ -434,7 +434,7 @@ describe("Gateway Integration", () => {
     });
 
     expect(res.status).toBe(200);
-    const body = await res.json();
+    const body = (await res.json()) as any;
     expect(body).toEqual(expect.objectContaining({ ok: true }));
     expect(body.data).toEqual(expect.objectContaining({ workspaces: [] }));
   });
@@ -572,7 +572,7 @@ describe("Gateway Integration", () => {
     });
 
     expect(res.status).toBe(200);
-    const body = await res.json();
+    const body = (await res.json()) as any;
     expect(body).toEqual(expect.objectContaining({ ok: true }));
     expect(body.data).toEqual(
       expect.objectContaining({
@@ -654,7 +654,7 @@ describe("Gateway Integration", () => {
     });
 
     expect(res.status).toBe(200);
-    const body = await res.json();
+    const body = (await res.json()) as any;
     expect(body).toEqual(expect.objectContaining({ ok: true }));
     expect(body.data).toEqual({ workspaces: [] });
   });
@@ -729,7 +729,7 @@ describe("Gateway Integration", () => {
     });
 
     expect(res.status).toBe(200);
-    const body = await res.json();
+    const body = (await res.json()) as any;
     expect(body).toEqual(expect.objectContaining({ ok: true }));
     expect(body.data).toEqual({ members: [] });
   });
@@ -787,7 +787,7 @@ describe("Gateway Integration", () => {
     );
 
     expect(res.status).toBe(200);
-    const body = await res.json();
+    const body = (await res.json()) as any;
     expect(body).toEqual(expect.objectContaining({ ok: true }));
     expect(body.data).toEqual({ events: [] });
   });
@@ -863,7 +863,7 @@ describe("Gateway Integration", () => {
     );
 
     expect(res.status).toBe(200);
-    const body = await res.json();
+    const body = (await res.json()) as any;
     expect(body).toEqual(expect.objectContaining({ ok: true }));
     expect(body.data).toEqual([
       expect.objectContaining({
@@ -922,7 +922,7 @@ describe("Gateway Integration", () => {
     );
 
     expect(res.status).toBe(200);
-    const body = await res.json();
+    const body = (await res.json()) as any;
     expect(body).toEqual(expect.objectContaining({ ok: true }));
     expect(body.data).toEqual({ routes: [] });
   });
@@ -998,7 +998,7 @@ describe("Gateway Integration", () => {
     });
 
     expect(res.status).toBe(201);
-    const body = await res.json();
+    const body = (await res.json()) as any;
     expect(body).toEqual(expect.objectContaining({ ok: true }));
     expect(body.data).toEqual(
       expect.objectContaining({ id: "ws-1", name: "Acme", slug: "acme" }),
@@ -1064,7 +1064,7 @@ describe("Gateway Integration", () => {
     });
 
     expect(res.status).toBe(200);
-    const body = await res.json();
+    const body = (await res.json()) as any;
     expect(body).toEqual(
       expect.objectContaining({
         ok: true,
@@ -1145,7 +1145,7 @@ describe("Gateway Integration", () => {
     });
 
     expect(res.status).toBe(201);
-    const body = await res.json();
+    const body = (await res.json()) as any;
     expect(body).toEqual(
       expect.objectContaining({
         ok: true,
@@ -1209,7 +1209,7 @@ describe("Gateway Integration", () => {
     });
 
     expect(res.status).toBe(200);
-    const body = await res.json();
+    const body = (await res.json()) as any;
     expect(body).toEqual(expect.objectContaining({ ok: true }));
   });
 
@@ -1350,7 +1350,7 @@ describe("Gateway Integration", () => {
     const res = await app.request("/random/path/that/does/not/exist");
     // Currently dynamicRouter.handle returns 404 for default catch-all
     expect(res.status).toBe(404);
-    const body = await res.json();
+    const body = (await res.json()) as any;
 
     // Assert Envelope Structure for Error
     expect(body).toEqual(
@@ -1545,14 +1545,14 @@ describe("Gateway Integration", () => {
 
     it("should enforce workspace context via X-Workspace-Id header even for public routes", async () => {
       const app = await createTestApp();
-      let capturedWorkspaceId: string | null = null;
+      const captured = { workspaceId: null as string | null };
 
       global.fetch = vi.fn(
         (url: string | URL | Request, init?: RequestInit) => {
           const urlStr = url.toString();
           if (urlStr.includes("/internal/cms-actions")) {
             const headers = new Headers(init?.headers);
-            capturedWorkspaceId = headers.get("X-Workspace-Id");
+            captured.workspaceId = headers.get("X-Workspace-Id");
 
             return Promise.resolve(
               new Response(JSON.stringify({ entries: [] }), { status: 200 }),
@@ -1571,7 +1571,7 @@ describe("Gateway Integration", () => {
         method: "GET",
       });
 
-      expect(capturedWorkspaceId).toBe("my-workspace-id");
+      expect(captured.workspaceId).toBe("my-workspace-id");
     });
 
     it("should not set X-XS-User-Id for anonymous public content requests", async () => {

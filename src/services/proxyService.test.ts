@@ -2,6 +2,10 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "bun:test";
 import { ProxyService } from "./proxyService";
 import type { RouteMatch } from "../types";
 
+function requestHeaders(init: RequestInit): Headers {
+  return new Headers(init.headers);
+}
+
 describe("ProxyService", () => {
   let proxyService: ProxyService;
   const internalServiceToken = "test-internal-token";
@@ -54,9 +58,9 @@ describe("ProxyService", () => {
 
     expect(url).toBe("http://localhost:3001/documents");
     expect(init.method).toBe("POST");
-    expect(init.headers.get("X-Workspace-Id")).toBe("123");
-    expect(init.headers.get("Content-Type")).toBe("application/json");
-    expect(init.headers.get("X-Internal-Service-Token")).toBe(
+    expect(requestHeaders(init).get("X-Workspace-Id")).toBe("123");
+    expect(requestHeaders(init).get("Content-Type")).toBe("application/json");
+    expect(requestHeaders(init).get("X-Internal-Service-Token")).toBe(
       internalServiceToken
     );
 
@@ -119,7 +123,7 @@ describe("ProxyService", () => {
     await proxyService.proxyRequest(mockRequest, routeMatch);
 
     const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-    expect(init.headers.get("X-Internal-Service-Token")).toBe(
+    expect(requestHeaders(init).get("X-Internal-Service-Token")).toBe(
       internalServiceToken
     );
   });
@@ -154,7 +158,7 @@ describe("ProxyService", () => {
     await proxyService.proxyRequest(mockRequest, routeMatch);
 
     const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-    expect(init.headers.get("X-Workspace-Id")).toBe("wsX-Evil: bad");
+    expect(requestHeaders(init).get("X-Workspace-Id")).toBe("wsX-Evil: bad");
   });
 
   it("should sanitize injected control characters in internal service token", async () => {
@@ -187,7 +191,7 @@ describe("ProxyService", () => {
     await proxyService.proxyRequest(mockRequest, routeMatch);
 
     const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-    expect(init.headers.get("X-Internal-Service-Token")).toBe("tokbad");
+    expect(requestHeaders(init).get("X-Internal-Service-Token")).toBe("tokbad");
   });
 
   it("should strip spoofed X-XS-User-Id and omit user id by default", async () => {
@@ -221,7 +225,7 @@ describe("ProxyService", () => {
     await proxyService.proxyRequest(mockRequest, routeMatch);
 
     const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-    expect(init.headers.get("X-XS-User-Id")).toBeNull();
+    expect(requestHeaders(init).get("X-XS-User-Id")).toBeNull();
   });
 
   it("should send provided user id when given", async () => {
@@ -257,7 +261,7 @@ describe("ProxyService", () => {
     });
 
     const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-    expect(init.headers.get("X-XS-User-Id")).toBe("user-1");
+    expect(requestHeaders(init).get("X-XS-User-Id")).toBe("user-1");
   });
 
   it("should throw if service URL not configured", async () => {

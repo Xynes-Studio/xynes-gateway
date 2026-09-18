@@ -1,5 +1,6 @@
 import { config } from "../infra/config";
 import type { Context } from "hono";
+import type { ContentfulStatusCode } from "hono/utils/http-status";
 import type { Route, RouteMatch } from "../types";
 import type { IAuthzService } from "../services/authzService";
 import { createSuccessResponse, createErrorResponse } from "../types/envelope";
@@ -1213,7 +1214,7 @@ export class DynamicRouter {
           auth.message,
           requestId,
         );
-        return c.json(errorResponse, auth.status);
+        return c.json(errorResponse, auth.status as ContentfulStatusCode);
       }
       this.setRouteMeta(c, match, auth.userId);
 

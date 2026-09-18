@@ -164,10 +164,8 @@ async function getJwks(
   const existing = jwksInFlight.get(cacheKey);
   if (existing) return await existing;
 
-  let resolvePending: ((jwks: Jwks | null) => void) | null = null;
-  const pending = new Promise<Jwks | null>((resolve) => {
-    resolvePending = resolve;
-  });
+  const { promise: pending, resolve: resolvePending } =
+    Promise.withResolvers<Jwks | null>();
   jwksInFlight.set(cacheKey, pending);
   void pending.finally(() => {
     jwksInFlight.delete(cacheKey);
@@ -196,27 +194,27 @@ async function getJwks(
 
       const raced = await Promise.race([fetchPromise, timeoutPromise]);
       if (raced.type === "timeout") {
-        resolvePending?.(null);
+        resolvePending(null);
         return;
       }
       if (raced.type === "err") {
-        resolvePending?.(null);
+        resolvePending(null);
         return;
       }
 
       const res = raced.res;
       if (res.status >= 300 && res.status < 400) {
-        resolvePending?.(null);
+        resolvePending(null);
         return;
       }
       if (!res.ok) {
-        resolvePending?.(null);
+        resolvePending(null);
         return;
       }
 
       const parsed = (await res.json().catch(() => null)) as unknown;
       if (!parsed || typeof parsed !== "object") {
-        resolvePending?.(null);
+        resolvePending(null);
         return;
       }
       if (!("keys" in parsed) || !Array.isArray((parsed as { keys?: unknown }).keys)) {
@@ -226,12 +224,11 @@ async function getJwks(
 
       const jwks = parsed as Jwks;
       jwksCache.set(cacheKey, { jwks, expiresAt: now + ttlMs });
-      resolvePending?.(jwks);
+      resolvePending(jwks);
     } catch {
-      resolvePending?.(null);
+      resolvePending(null);
     } finally {
       if (hardTimer) clearTimeout(hardTimer);
-      resolvePending = null;
     }
   })();
 

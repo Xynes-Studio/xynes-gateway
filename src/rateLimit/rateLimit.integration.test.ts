@@ -4,11 +4,11 @@
  * SEC-RATELIMIT-1: Integration tests for rate limiting in the gateway.
  */
 
-import { describe, it, expect, beforeEach, afterEach, vi } from "bun:test";
+import { describe, it, expect, beforeEach, afterEach, vi, mock } from "bun:test";
 import { signHs256ForTest } from "../testUtils/jwtTestUtils";
 
 // Mock config
-vi.module("../infra/config", () => ({
+mock.module("../infra/config", () => ({
   config: {
     internalServiceToken: "test-internal-token",
     auth: {
@@ -33,7 +33,7 @@ vi.module("../infra/config", () => ({
 
 // Mock DB ping
 const pingDbMock = vi.fn();
-vi.module("../infra/db", () => ({
+mock.module("../infra/db", () => ({
   pingDb: pingDbMock,
 }));
 
@@ -46,10 +46,10 @@ import type { Route } from "../types";
 import type { RateLimitConfig } from "../rateLimit/types";
 
 describe("Rate Limiting Integration", () => {
-  let router: DynamicRouter;
-  let rateLimiter: RateLimiter;
-  let store: InMemoryRateLimitStore;
-  let configRepository: StaticRateLimitConfigRepository;
+  let router: InstanceType<typeof DynamicRouter>;
+  let rateLimiter: InstanceType<typeof RateLimiter>;
+  let store: InstanceType<typeof InMemoryRateLimitStore>;
+  let configRepository: InstanceType<typeof StaticRateLimitConfigRepository>;
 
   const mockRoutes: Route[] = [
     {

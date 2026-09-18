@@ -4,7 +4,7 @@
  * SEC-RATELIMIT-1: Unit tests for rate limit infrastructure setup.
  */
 
-import { describe, it, expect, vi } from "bun:test";
+import { describe, it, expect, mock } from "bun:test";
 import {
   createRateLimiterWithStaticConfig,
   getDefaultRateLimitConfigs,
@@ -12,7 +12,7 @@ import {
 import { RateLimiter } from "../rateLimit";
 
 // Mock config module
-vi.module("./config", () => ({
+mock.module("./config", () => ({
   config: {
     databaseUrl: undefined,
   },

@@ -157,7 +157,7 @@ export class GatewayLogDispatcher {
   private async sendCanonical(log: GatewayAccessLogV1): Promise<void> {
     await this.sendAction(log, {
       actionKey: "telemetry.gateway.logs.ingest",
-      payload: log,
+      payload: { ...log },
     });
   }
 

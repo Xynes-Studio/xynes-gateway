@@ -5,12 +5,12 @@
  * Uses real JWT signing with test utilities to match production behavior.
  */
 
-import { describe, it, expect, vi, beforeEach } from "bun:test";
+import { describe, it, expect, beforeEach, mock } from "bun:test";
 import { Hono } from "hono";
 import { signHs256ForTest } from "../testUtils/jwtTestUtils";
 
 // Mock config - must be before importing the middleware
-vi.module("../infra/config", () => ({
+mock.module("../infra/config", () => ({
   config: {
     auth: {
       jwtSecret: "test-jwt-secret",
@@ -31,8 +31,8 @@ describe("jwtAuthMiddleware", () => {
     app.use("*", jwtAuthMiddleware);
     app.get("/test", (c) => {
       return c.json({
-        userId: c.get("userId"),
-        workspaceId: c.get("workspaceId"),
+        userId: c.get("userId" as never),
+        workspaceId: c.get("workspaceId" as never),
       });
     });
   });
@@ -41,7 +41,7 @@ describe("jwtAuthMiddleware", () => {
     const res = await app.request("/test");
 
     expect(res.status).toBe(401);
-    const body = await res.json();
+    const body = (await res.json()) as any;
     expect(body.error.code).toBe("UNAUTHORIZED");
   });
 
@@ -51,7 +51,7 @@ describe("jwtAuthMiddleware", () => {
     });
 
     expect(res.status).toBe(401);
-    const body = await res.json();
+    const body = (await res.json()) as any;
     expect(body.error.code).toBe("UNAUTHORIZED");
   });
 
@@ -74,7 +74,7 @@ describe("jwtAuthMiddleware", () => {
     });
 
     expect(res.status).toBe(200);
-    const body = await res.json();
+    const body = (await res.json()) as any;
     expect(body.userId).toBe("user-123");
   });
 
@@ -106,7 +106,7 @@ describe("jwtAuthMiddleware", () => {
     });
 
     expect(res.status).toBe(200);
-    const body = await res.json();
+    const body = (await res.json()) as any;
     expect(body.workspaceId).toBe("ws-456");
   });
 
@@ -121,7 +121,7 @@ describe("jwtAuthMiddleware", () => {
     });
 
     expect(res.status).toBe(200);
-    const body = await res.json();
+    const body = (await res.json()) as any;
     expect(body.workspaceId).toBe("ws-789");
   });
 
@@ -136,7 +136,7 @@ describe("jwtAuthMiddleware", () => {
     });
 
     expect(res.status).toBe(200);
-    const body = await res.json();
+    const body = (await res.json()) as any;
     expect(body.workspaceId).toBeUndefined();
   });
 
@@ -167,7 +167,7 @@ describe("jwtAuthMiddleware", () => {
     });
 
     expect(res.status).toBe(200);
-    const body = await res.json();
+    const body = (await res.json()) as any;
     expect(body.workspaceId).toBe("header-ws");
   });
 });

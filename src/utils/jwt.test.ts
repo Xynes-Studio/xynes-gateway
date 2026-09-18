@@ -208,11 +208,11 @@ describe("jwt", () => {
     const { privateKeyPem } = createRsaKeyPairForTest();
     const token = signRs256ForTest({ sub: "user-1", exp: 2_000_000_000 }, privateKeyPem, { kid: "k1" });
 
-    let capturedSignal: AbortSignal | null = null;
+    const captured = { signal: null as AbortSignal | null };
     const fetcher = async (_url: string, init?: RequestInit) => {
-      capturedSignal = (init?.signal as AbortSignal | undefined) ?? null;
+      captured.signal = (init?.signal as AbortSignal | undefined) ?? null;
       return await new Promise<Response>((_resolve, reject) => {
-        capturedSignal?.addEventListener("abort", () => {
+        captured.signal?.addEventListener("abort", () => {
           const err = new Error("aborted");
           (err as unknown as { name: string }).name = "AbortError";
           reject(err);
@@ -231,7 +231,7 @@ describe("jwt", () => {
 
     expect(result).not.toBe("timeout");
     expect(result).toBeNull();
-    expect(capturedSignal).toBeTruthy();
-    expect(capturedSignal?.aborted).toBe(true);
+    expect(captured.signal).toBeTruthy();
+    expect(captured.signal?.aborted).toBe(true);
   });
 });
