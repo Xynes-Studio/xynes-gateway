@@ -790,6 +790,22 @@ export class DynamicRouter {
         // Read raw body text first
         const bodyText = await request.text();
         if (bodyText && bodyText.trim().length > 0) {
+          const mediaType = request.headers
+            .get("Content-Type")
+            ?.split(";", 1)[0]
+            ?.trim()
+            .toLowerCase();
+          if (mediaType !== "application/json") {
+            const errorResponse = createErrorResponse(
+              "UNSUPPORTED_MEDIA_TYPE",
+              "Content-Type must be application/json",
+              reqId,
+            );
+            return new Response(JSON.stringify(errorResponse), {
+              status: 415,
+              headers: { "Content-Type": "application/json" },
+            });
+          }
           // Use safe JSON parser with depth/size guards
           body = safeJsonParse(bodyText);
         }
