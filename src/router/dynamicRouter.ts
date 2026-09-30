@@ -789,7 +789,7 @@ export class DynamicRouter {
       try {
         // Read raw body text first
         const bodyText = await request.text();
-        if (bodyText && bodyText.trim().length > 0) {
+        if (bodyText.length > 0) {
           const mediaType = request.headers
             .get("Content-Type")
             ?.split(";", 1)[0]
@@ -806,8 +806,10 @@ export class DynamicRouter {
               headers: { "Content-Type": "application/json" },
             });
           }
-          // Use safe JSON parser with depth/size guards
-          body = safeJsonParse(bodyText);
+          if (bodyText.trim().length > 0) {
+            // Use safe JSON parser with depth/size guards
+            body = safeJsonParse(bodyText);
+          }
         }
       } catch (err) {
         // SEC-BODYLIMIT-1: Return safe error for malformed JSON

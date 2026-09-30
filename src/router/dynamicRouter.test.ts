@@ -737,6 +737,46 @@ describe("DynamicRouter", () => {
       expect(global.fetch).not.toHaveBeenCalled();
     });
 
+    it("rejects whitespace-only CMS bodies with non-JSON or missing media type", async () => {
+      const route: Route = {
+        ...mockRoutes[0]!,
+        id: "cms-entry-create-whitespace",
+        pathPattern: "/workspaces/:workspaceId/content/entries",
+        serviceKey: "cms-core",
+        targetPath: "/content/entries",
+        actionKey: "cms.entry.create",
+      };
+      const match = { route, params: { workspaceId: "ws-1" } };
+      (global.fetch as unknown as MockFn).mockResolvedValue(
+        new Response('{"entry":{"id":"unexpected"}}', { status: 200 }),
+      );
+
+      for (const mediaType of ["text/plain", null]) {
+        const req = new Request(
+          "http://localhost/workspaces/ws-1/content/entries",
+          {
+            method: "POST",
+            headers: mediaType ? { "Content-Type": mediaType } : undefined,
+            body: " \t\n",
+          },
+        );
+        if (mediaType === null) req.headers.delete("Content-Type");
+
+        const response = await router.proxyRequest(match, req, {});
+        const body = (await response.json()) as {
+          ok: boolean;
+          error?: { code: string };
+        };
+
+        expect(response.status).toBe(415);
+        expect(body).toMatchObject({
+          ok: false,
+          error: { code: "UNSUPPORTED_MEDIA_TYPE" },
+        });
+        expect(global.fetch).not.toHaveBeenCalled();
+      }
+    });
+
     it("should not emit telemetry directly from proxyRequest", async () => {
       const route = mockRoutes[0];
       const match = { route: route!, params: { workspaceId: "123" } };
