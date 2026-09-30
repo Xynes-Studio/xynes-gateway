@@ -789,9 +789,27 @@ export class DynamicRouter {
       try {
         // Read raw body text first
         const bodyText = await request.text();
-        if (bodyText && bodyText.trim().length > 0) {
-          // Use safe JSON parser with depth/size guards
-          body = safeJsonParse(bodyText);
+        if (bodyText.length > 0) {
+          const mediaType = request.headers
+            .get("Content-Type")
+            ?.split(";", 1)[0]
+            ?.trim()
+            .toLowerCase();
+          if (mediaType !== "application/json") {
+            const errorResponse = createErrorResponse(
+              "UNSUPPORTED_MEDIA_TYPE",
+              "Content-Type must be application/json",
+              reqId,
+            );
+            return new Response(JSON.stringify(errorResponse), {
+              status: 415,
+              headers: { "Content-Type": "application/json" },
+            });
+          }
+          if (bodyText.trim().length > 0) {
+            // Use safe JSON parser with depth/size guards
+            body = safeJsonParse(bodyText);
+          }
         }
       } catch (err) {
         // SEC-BODYLIMIT-1: Return safe error for malformed JSON

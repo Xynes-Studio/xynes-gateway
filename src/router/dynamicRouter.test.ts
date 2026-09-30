@@ -681,7 +681,7 @@ describe("DynamicRouter", () => {
       // SEC-BODYLIMIT-1: Now using text() + safeJsonParse, so mock text()
       const req = {
         method: "POST",
-        headers: new Headers(),
+        headers: new Headers({ "Content-Type": "application/json" }),
         url: "http://localhost/workspaces/123/documents",
         text: vi.fn().mockResolvedValue("{invalid json}"),
       } as unknown as Request;
@@ -696,6 +696,85 @@ describe("DynamicRouter", () => {
       };
       expect(body.ok).toBe(false);
       expect(body.error?.code).toBe("INVALID_JSON");
+    });
+
+    it("rejects a text/plain JSON CMS create body before calling CMS Core", async () => {
+      const route: Route = {
+        id: "cms-entry-create",
+        pathPattern: "/workspaces/:workspaceId/content/entries",
+        method: "POST",
+        serviceKey: "cms-core",
+        targetPath: "/content/entries",
+        workspaceScoped: true,
+        actionKey: "cms.entry.create",
+      };
+      const match = { route, params: { workspaceId: "ws-1" } };
+      const req = new Request(
+        "http://localhost/workspaces/ws-1/content/entries",
+        {
+          method: "POST",
+          headers: { "Content-Type": "text/plain" },
+          body: JSON.stringify({ title: "Must not be created" }),
+        },
+      );
+      (global.fetch as unknown as MockFn).mockResolvedValue(
+        new Response('{"entry":{"id":"unexpected"}}', { status: 200 }),
+      );
+
+      const response = await router.proxyRequest(match, req, {});
+      const body = (await response.json()) as {
+        ok: boolean;
+        error?: { code: string; message: string };
+      };
+
+      expect(response.status).toBe(415);
+      expect(response.headers.get("Content-Type")).toBe("application/json");
+      expect(body).toMatchObject({
+        ok: false,
+        error: { code: "UNSUPPORTED_MEDIA_TYPE" },
+      });
+      expect(body.error?.message).not.toContain("Must not be created");
+      expect(global.fetch).not.toHaveBeenCalled();
+    });
+
+    it("rejects whitespace-only CMS bodies with non-JSON or missing media type", async () => {
+      const route: Route = {
+        ...mockRoutes[0]!,
+        id: "cms-entry-create-whitespace",
+        pathPattern: "/workspaces/:workspaceId/content/entries",
+        serviceKey: "cms-core",
+        targetPath: "/content/entries",
+        actionKey: "cms.entry.create",
+      };
+      const match = { route, params: { workspaceId: "ws-1" } };
+      (global.fetch as unknown as MockFn).mockResolvedValue(
+        new Response('{"entry":{"id":"unexpected"}}', { status: 200 }),
+      );
+
+      for (const mediaType of ["text/plain", null]) {
+        const req = new Request(
+          "http://localhost/workspaces/ws-1/content/entries",
+          {
+            method: "POST",
+            headers: mediaType ? { "Content-Type": mediaType } : undefined,
+            body: " \t\n",
+          },
+        );
+        if (mediaType === null) req.headers.delete("Content-Type");
+
+        const response = await router.proxyRequest(match, req, {});
+        const body = (await response.json()) as {
+          ok: boolean;
+          error?: { code: string };
+        };
+
+        expect(response.status).toBe(415);
+        expect(body).toMatchObject({
+          ok: false,
+          error: { code: "UNSUPPORTED_MEDIA_TYPE" },
+        });
+        expect(global.fetch).not.toHaveBeenCalled();
+      }
     });
 
     it("should not emit telemetry directly from proxyRequest", async () => {
