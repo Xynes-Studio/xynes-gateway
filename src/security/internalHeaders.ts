@@ -1,5 +1,7 @@
 import { signInternalJwt, mapServiceKeyToAudience } from "./internalJwt";
 
+import { signInternalRequest } from "./internalRequest";
+
 const INTERNAL_HEADER_PREFIXES = ["x-xs-", "x-internal-"] as const;
 
 const INTERNAL_HEADER_DENYLIST = new Set<string>([
@@ -36,6 +38,7 @@ export function isClientInternalHeader(name: string): boolean {
 }
 
 export interface InternalHeaderContext {
+  boundRequest?: { url: string; method: string; body: string; operation: string };
   /** @deprecated Use internalJwtSigningKey instead for SEC-INTERNAL-AUTH-2 */
   internalServiceToken?: string;
   /** SEC-INTERNAL-AUTH-2: JWT signing key for internal service auth */
@@ -64,7 +67,8 @@ export interface InternalHeaderContext {
  * Build headers for internal service communication.
  *
  * SEC-INTERNAL-AUTH-2: When internalJwtSigningKey and serviceKey are provided,
- * generates a signed JWT with the target service as audience. Falls back to
+ * generates a signed JWT for legacy consumers only. Protected accounts/authz
+ * requests require a bound Ed25519 identity and never fall back. Falls back to
  * legacy static token if JWT signing is not configured.
  */
 export function buildInternalHeaders(
@@ -72,6 +76,7 @@ export function buildInternalHeaders(
   ctx: InternalHeaderContext
 ): Headers {
   const headers = new Headers();
+  const boundAudience = !!ctx.serviceKey && ["accounts", "accounts-service", "authz", "authz-service"].includes(ctx.serviceKey);
 
   for (const [name, value] of clientHeaders.entries()) {
     const lower = name.toLowerCase();
@@ -88,7 +93,7 @@ export function buildInternalHeaders(
 
   // SEC-INTERNAL-AUTH-2: Prefer JWT-based auth over legacy static token
   const requestId = ctx.requestId || `req-${Date.now().toString(36)}`;
-  if (ctx.internalJwtSigningKey && ctx.serviceKey) {
+  if (!boundAudience && ctx.internalJwtSigningKey && ctx.serviceKey) {
     const audience = mapServiceKeyToAudience(ctx.serviceKey);
     if (audience) {
       const token = signInternalJwt(ctx.internalJwtSigningKey, {
@@ -103,7 +108,7 @@ export function buildInternalHeaders(
         sanitizeInternalHeaderValue(ctx.internalServiceToken)
       );
     }
-  } else if (ctx.internalServiceToken) {
+  } else if (!boundAudience && ctx.internalServiceToken) {
     // Legacy mode: use static token
     headers.set(
       "X-Internal-Service-Token",
@@ -141,5 +146,10 @@ export function buildInternalHeaders(
       );
   }
 
+  if (boundAudience && ctx.serviceKey) {
+    if (!ctx.boundRequest) throw new Error("Bound internal request required");
+    const audience = ctx.serviceKey.startsWith("accounts") ? "accounts-service" : "authz-service";
+    headers.set("X-Internal-Service-Token", signInternalRequest({ ...ctx.boundRequest, audience, headers }));
+  }
   return headers;
 }

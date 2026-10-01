@@ -1,4 +1,4 @@
-import { signInternalJwt } from "../security/internalJwt";
+import { signInternalRequest } from "../security/internalRequest";
 import { generateRequestId } from "../utils/requestId";
 
 export interface IAuthzService {
@@ -11,76 +11,38 @@ export interface IAuthzService {
 
 export interface AuthzServiceConfig {
   authzUrl?: string;
-  /** @deprecated Use internalJwtSigningKey for SEC-INTERNAL-AUTH-2 */
+  /** @deprecated Ignored for authentication. Use per-service request identity files. */
   internalServiceToken?: string;
-  /** SEC-INTERNAL-AUTH-2: JWT signing key for internal service auth */
+  /** @deprecated Ignored for authentication. Shared signing keys cannot authenticate this client. */
   internalJwtSigningKey?: string;
 }
 
 export class AuthzService implements IAuthzService {
   private authzUrl: string;
-  private internalServiceToken?: string;
-  private internalJwtSigningKey?: string;
 
   constructor(authzUrl?: string, internalServiceToken?: string);
   constructor(config: AuthzServiceConfig);
   constructor(
     authzUrlOrConfig: string | AuthzServiceConfig = "http://localhost:3002",
-    internalServiceToken?: string
+    _internalServiceToken?: string
   ) {
     if (typeof authzUrlOrConfig === "string") {
       // Legacy constructor
       this.authzUrl = authzUrlOrConfig;
-      this.internalServiceToken = internalServiceToken;
     } else {
       // New config-based constructor
       this.authzUrl = authzUrlOrConfig.authzUrl ?? "http://localhost:3002";
-      this.internalServiceToken = authzUrlOrConfig.internalServiceToken;
-      this.internalJwtSigningKey = authzUrlOrConfig.internalJwtSigningKey;
     }
   }
 
   private static extractAllowed(value: unknown): boolean | null {
     if (!value || typeof value !== "object") return null;
-
-    if (
-      "allowed" in value &&
-      typeof (value as { allowed?: unknown }).allowed === "boolean"
-    ) {
-      return (value as { allowed: boolean }).allowed;
+    if ("allowed" in value && typeof value.allowed === "boolean") return value.allowed;
+    if ("ok" in value && value.ok === true && "data" in value) {
+      const data = value.data;
+      if (data && typeof data === "object" && "allowed" in data && typeof data.allowed === "boolean") return data.allowed;
     }
-
-    if (
-      "ok" in value &&
-      (value as { ok?: unknown }).ok === true &&
-      "data" in value
-    ) {
-      const data = (value as { data?: unknown }).data;
-      if (
-        data &&
-        typeof data === "object" &&
-        "allowed" in data &&
-        typeof (data as { allowed?: unknown }).allowed === "boolean"
-      ) {
-        return (data as { allowed: boolean }).allowed;
-      }
-    }
-
     return null;
-  }
-
-  /**
-   * Generate the internal service token (JWT or legacy static token).
-   * SEC-INTERNAL-AUTH-2: Prefers JWT when signing key is available.
-   */
-  private generateInternalToken(requestId: string): string | null {
-    if (this.internalJwtSigningKey) {
-      return signInternalJwt(this.internalJwtSigningKey, {
-        serviceKey: "authz-service",
-        requestId,
-      });
-    }
-    return this.internalServiceToken ?? null;
   }
 
   async check(
@@ -95,15 +57,17 @@ export class AuthzService implements IAuthzService {
         "X-Request-Id": requestId,
       };
 
-      const token = this.generateInternalToken(requestId);
-      if (token) {
-        headers["X-Internal-Service-Token"] = token;
-      }
+      const body = JSON.stringify({ userId, workspaceId, actionKey });
+      const url = `${this.authzUrl}/authz/check`;
+      const signedHeaders = new Headers(headers);
+      signedHeaders.set("X-XS-User-Id", userId);
+      if (workspaceId) signedHeaders.set("X-Workspace-Id", workspaceId);
+      signedHeaders.set("X-Internal-Service-Token", signInternalRequest({ audience: "authz-service", operation: "authz.check", url, method: "POST", headers: signedHeaders, body }));
 
       const response = await fetch(`${this.authzUrl}/authz/check`, {
         method: "POST",
-        headers,
-        body: JSON.stringify({ userId, workspaceId, actionKey }),
+        headers: signedHeaders,
+        body,
       });
 
       if (!response.ok) {
@@ -113,8 +77,8 @@ export class AuthzService implements IAuthzService {
       const parsed = await response.json().catch(() => null);
       const allowed = AuthzService.extractAllowed(parsed);
       return allowed === true;
-    } catch (error) {
-      console.error("Authz check failed:", error);
+    } catch {
+      console.error("Authz check failed");
       return false; // Fail safe
     }
   }

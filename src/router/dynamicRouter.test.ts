@@ -1,3 +1,4 @@
+import "../tests/support/internal-request";
 import { describe, it, expect, beforeEach, afterEach, vi, mock } from "bun:test";
 import type { Route, RouteMatch } from "../types";
 import type { IAuthzService } from "../services/authzService";

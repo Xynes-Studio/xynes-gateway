@@ -1158,6 +1158,9 @@ The Dynamic Router implements a "Smart Proxy" pattern:
 
 ### Structured Internal JWT for Service-to-Service Auth (SEC-INTERNAL-AUTH-2)
 
+> XYN-SEC-003 replaces shared credentials on protected accounts/authz paths; the table below is legacy compatibility for other services only.
+
+
 The gateway signs short-lived HS256 JWTs for service-to-service authentication, replacing the legacy static shared secret pattern.
 
 #### Architecture
@@ -1222,7 +1225,7 @@ The gateway signs short-lived HS256 JWTs for service-to-service authentication, 
 
 #### Security Properties
 
-- **Short-lived**: 60-second TTL prevents replay attacks
+- **Short-lived**: 60-second TTL limits the replay window
 - **Audience-scoped**: JWT is only valid for the intended service
 - **Timing-safe**: Signature verification uses constant-time comparison
 - **Clock tolerance**: 5-second skew allowance for distributed clocks
@@ -1831,3 +1834,32 @@ git revert <H-1 commit>            # restores the dev-only Dockerfile
 ```
 
 The `/health` shape upgrade and access-log skip are also revertable independently — see `src/routes/health.route.ts`, `src/infra/routeTableStatus.ts`, and `src/logging/middleware.ts` for the discrete changes.
+
+
+## XYN-SEC-003 internal request boundary
+
+Gateway signs accounts action requests and authz permission checks with its own Ed25519 private key. Client-supplied identity headers are stripped before signing.
+The signed context binds issuer/key id, audience, method, path/query, exact body,
+action, workspace, actor metadata and request id. Tokens expire within 60 seconds.
+Shared JWT/static credentials are rejected on protected action endpoints even in
+hybrid mode. Missing/invalid identity files fail closed; no database migration is
+required. Provision files before deploying the three updated services together.
+
+Gateway/accounts callers use `INTERNAL_REQUEST_PRIVATE_KEY_FILE` and
+`INTERNAL_REQUEST_KEY_ID`. Accounts/authz receivers use
+`INTERNAL_REQUEST_TRUST_FILE` (JSON array of issuer, keyId and SPKI publicKey).
+Never put private PEM values in shared env or receiver trust files. The canonical
+provisioning/rotation/stage runbook is the sibling infra repository's
+`infra/release/INTERNAL-REQUEST-IDENTITIES.md`; dev Compose owns individual mounts
+and QA/Prod can apply `infra/compose/internal-request-identities.yml` last.
+
+Internal API errors: missing token 401, untrusted caller or changed context 403,
+misconfigured identity 500. Existing payload validation and body limits remain.
+Protocol mirrors must remain identical across gateway/accounts/authz; infra
+`scripts/test/sec003-identities.test.sh` enforces parity. Negative protocol tests
+and the three-service tenant fixture accompany the change. Exact retries within
+token lifetime use existing operation idempotency; no global replay cache exists.
+
+SEC-003-FU-1 tracks other services' legacy internal credentials and CMS/docs'
+isolated read-only `POST /authz/check` compatibility adapter. That adapter cannot
+assign or list roles. Broader service migration is not part of this closure.

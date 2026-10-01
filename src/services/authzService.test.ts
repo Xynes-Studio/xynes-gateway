@@ -1,3 +1,4 @@
+import "../tests/support/internal-request";
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'bun:test';
 import { AuthzService } from './authzService';
@@ -23,14 +24,14 @@ describe('AuthzService', () => {
 
     const result = await service.check('user-1', 'ws-1', 'action:read');
     expect(result).toBe(true);
-    expect(global.fetch).toHaveBeenCalledWith('http://mock-authz/authz/check', expect.objectContaining({
-      method: 'POST',
-      headers: expect.objectContaining({
-        'Content-Type': 'application/json',
-        'X-Internal-Service-Token': 'test-internal-token',
-      }),
-      body: JSON.stringify({ userId: 'user-1', workspaceId: 'ws-1', actionKey: 'action:read' })
-    }));
+    const calls = fetchMock.mock.calls;
+    expect(calls[0]?.[0]).toBe('http://mock-authz/authz/check');
+    const init: RequestInit = calls[0]?.[1];
+    const headers = new Headers(init.headers);
+    expect(headers.get('Content-Type')).toBe('application/json');
+    expect(headers.get('X-Internal-Service-Token')).not.toBe('test-internal-token');
+    expect(headers.get('X-XS-User-Id')).toBe('user-1');
+    expect(init.body).toBe(JSON.stringify({ userId: 'user-1', workspaceId: 'ws-1', actionKey: 'action:read' }));
   });
 
   it('should return false if authz service denies (allowed: false)', async () => {
