@@ -2,6 +2,7 @@ import "../tests/support/internal-request";
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'bun:test';
 import { AuthzService } from './authzService';
+import { InternalRequestConfigError } from '../security/internalRequest';
 
 describe('AuthzService', () => {
   let service: AuthzService;
@@ -73,5 +74,26 @@ describe('AuthzService', () => {
 
     const result = await service.check('user-1', 'ws-1', 'action:create');
     expect(result).toBe(false);
+  });
+
+  it('propagates identity misconfiguration without making a permission request', async () => {
+    const savedFile = process.env.INTERNAL_REQUEST_PRIVATE_KEY_FILE;
+    const savedId = process.env.INTERNAL_REQUEST_KEY_ID;
+    try {
+      for (const failure of ['missing-file', 'unreadable-file', 'missing-key-id']) {
+        process.env.INTERNAL_REQUEST_PRIVATE_KEY_FILE = savedFile;
+        process.env.INTERNAL_REQUEST_KEY_ID = savedId;
+        if (failure === 'missing-file') delete process.env.INTERNAL_REQUEST_PRIVATE_KEY_FILE;
+        if (failure === 'unreadable-file') process.env.INTERNAL_REQUEST_PRIVATE_KEY_FILE = '/nonexistent/sec003-private.pem';
+        if (failure === 'missing-key-id') delete process.env.INTERNAL_REQUEST_KEY_ID;
+        await expect(service.check('user-1', 'ws-1', 'action:read')).rejects.toBeInstanceOf(InternalRequestConfigError);
+        expect(global.fetch).not.toHaveBeenCalled();
+      }
+    } finally {
+      if (savedFile === undefined) delete process.env.INTERNAL_REQUEST_PRIVATE_KEY_FILE;
+      else process.env.INTERNAL_REQUEST_PRIVATE_KEY_FILE = savedFile;
+      if (savedId === undefined) delete process.env.INTERNAL_REQUEST_KEY_ID;
+      else process.env.INTERNAL_REQUEST_KEY_ID = savedId;
+    }
   });
 });

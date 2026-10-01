@@ -64,3 +64,7 @@ token lifetime use existing operation idempotency; no global replay cache exists
 SEC-003-FU-1 tracks other services' legacy internal credentials and CMS/docs'
 isolated read-only `POST /authz/check` compatibility adapter. That adapter cannot
 assign or list roles. Broader service migration is not part of this closure.
+
+Signing identity misconfiguration on protected RBAC routes returns a redacted
+HTTP 500 without calling authz or forwarding to accounts. Valid permission
+denials remain HTTP 403; authz network failures still deny access.

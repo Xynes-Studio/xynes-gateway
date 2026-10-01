@@ -1863,3 +1863,8 @@ token lifetime use existing operation idempotency; no global replay cache exists
 SEC-003-FU-1 tracks other services' legacy internal credentials and CMS/docs'
 isolated read-only `POST /authz/check` compatibility adapter. That adapter cannot
 assign or list roles. Broader service migration is not part of this closure.
+
+SEC-003 PR feedback: `AuthzService.check` propagates `InternalRequestConfigError`
+to the app's redacted 500 handler. Do not convert local signing configuration
+failures into ordinary permission denials. Unit and HTTP regressions ensure no
+forwarding occurs; genuine denials and network-failure behavior remain closed.

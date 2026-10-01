@@ -1,4 +1,4 @@
-import { signInternalRequest } from "../security/internalRequest";
+import { InternalRequestConfigError, signInternalRequest } from "../security/internalRequest";
 import { generateRequestId } from "../utils/requestId";
 
 export interface IAuthzService {
@@ -77,7 +77,8 @@ export class AuthzService implements IAuthzService {
       const parsed = await response.json().catch(() => null);
       const allowed = AuthzService.extractAllowed(parsed);
       return allowed === true;
-    } catch {
+    } catch (error: unknown) {
+      if (error instanceof InternalRequestConfigError) throw error;
       console.error("Authz check failed");
       return false; // Fail safe
     }
