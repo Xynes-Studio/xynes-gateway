@@ -1,3 +1,4 @@
+import "../tests/support/internal-request";
 /**
  * Rate Limit Integration Tests
  *

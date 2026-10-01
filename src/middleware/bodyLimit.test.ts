@@ -1,3 +1,4 @@
+import "../tests/support/internal-request";
 /**
  * Body Limit Middleware Tests
  *

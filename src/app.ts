@@ -25,7 +25,7 @@ export interface CreateAppOptions {
 }
 
 export const createApp = async (options: CreateAppOptions = {}) => {
-  const app = new Hono();
+  const app = new Hono<{ Variables: { requestId: string; gatewayRouteMeta: GatewayRouteMeta } }>();
 
   // CORS (development-friendly defaults)
   // - If GATEWAY_CORS_ALLOWED_ORIGINS is set: allow only those origins (comma-separated, exact match)
@@ -98,7 +98,7 @@ export const createApp = async (options: CreateAppOptions = {}) => {
       workspaceId: null,
       userId: null,
     };
-    c.set("gatewayRouteMeta" as never, routeMeta as never);
+    c.set("gatewayRouteMeta", routeMeta);
 
     const slug = (c.req.param("slug") || "").toLowerCase();
     if (!slug) return c.json({ available: false }, 400);
@@ -117,10 +117,13 @@ export const createApp = async (options: CreateAppOptions = {}) => {
     const userId = typeof claims?.sub === "string" ? claims.sub : null;
     if (!userId) return c.json({ available: false }, 401);
     routeMeta.userId = userId;
-    c.set("gatewayRouteMeta" as never, routeMeta as never);
+    c.set("gatewayRouteMeta", routeMeta);
 
-    const requestId = (c.get("requestId" as never) as string | undefined) ?? null;
+    const requestId = c.get("requestId") ?? null;
+    const requestBody = JSON.stringify({ actionKey: "accounts.workspaces.listForUser", payload: {} });
+    const endpoint = config.services.accounts + "/internal/accounts-actions";
     const headers = buildInternalHeaders(c.req.raw.headers, {
+      boundRequest: { url: endpoint, method: "POST", body: requestBody, operation: "accounts.workspaces.listForUser" },
       internalServiceToken: config.internalServiceToken,
       internalJwtSigningKey: config.internalJwtSigningKey,
       serviceKey: "accounts-service",
@@ -133,10 +136,7 @@ export const createApp = async (options: CreateAppOptions = {}) => {
       {
         method: "POST",
         headers,
-        body: JSON.stringify({
-          actionKey: "accounts.workspaces.listForUser",
-          payload: {},
-        }),
+        body: requestBody,
       },
     );
 
@@ -144,18 +144,19 @@ export const createApp = async (options: CreateAppOptions = {}) => {
       return c.json({ available: true, checked: false }, 200);
     }
 
-    type WorkspaceListResponse = {
-      data?: { workspaces?: Array<{ slug?: string | null }> };
-      workspaces?: Array<{ slug?: string | null }>;
-    };
-
-    const body = (await res
-      .json()
-      .catch(() => null)) as WorkspaceListResponse | null;
-    const workspaces = body?.data?.workspaces ?? body?.workspaces ?? [];
+    const body: unknown = await res.json().catch(() => null);
+    let workspaces: unknown;
+    if (body && typeof body === "object") {
+      if ("data" in body && body.data && typeof body.data === "object" && "workspaces" in body.data) {
+        workspaces = body.data.workspaces;
+      }
+      if (workspaces == null) {
+        workspaces = "workspaces" in body ? body.workspaces : workspaces;
+      }
+    }
     const taken = Array.isArray(workspaces)
       ? workspaces.some(
-          (w) => w && typeof w.slug === "string" && w.slug === slug,
+          (w: unknown) => w && typeof w === "object" && "slug" in w && typeof w.slug === "string" && w.slug === slug,
         )
       : false;
 

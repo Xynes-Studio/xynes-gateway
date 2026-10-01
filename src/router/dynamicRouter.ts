@@ -856,10 +856,12 @@ export class DynamicRouter {
       payload,
     };
 
+    const serializedBody = JSON.stringify(actionPayload);
     // Forward Headers
     const workspaceId =
       route.workspaceScoped && params.workspaceId ? params.workspaceId : null;
     const headers = buildInternalHeaders(request.headers, {
+      boundRequest: { url: actionEndpoint, method: "POST", body: serializedBody, operation: actionKey },
       internalServiceToken: config.internalServiceToken,
       // SEC-INTERNAL-AUTH-2: Use JWT-based internal auth
       internalJwtSigningKey: config.internalJwtSigningKey,
@@ -879,7 +881,7 @@ export class DynamicRouter {
       response = await fetch(actionEndpoint, {
         method: "POST",
         headers,
-        body: JSON.stringify(actionPayload),
+        body: serializedBody,
       });
     } catch (err: unknown) {
       const errorMessage = err instanceof Error ? err.message : "Unknown error";

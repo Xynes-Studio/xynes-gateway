@@ -1,3 +1,5 @@
+import { gatewayIdentity } from "./support/internal-request";
+import { verifyInternalRequest } from "../security/internalRequest";
 import { describe, it, expect, beforeAll, afterAll, vi, mock } from "bun:test";
 import { Hono } from "hono";
 import type { Context } from "hono";
@@ -68,8 +70,9 @@ describe("SEC-INT-1 internal auth (stack)", () => {
   beforeAll(() => {
     authzApp = new Hono();
     authzApp.post("/authz/check", async (c) => {
-      const denied = requireToken(c);
-      if (denied) return denied;
+      const body = await c.req.text();
+      const valid = verifyInternalRequest(c.req.header("X-Internal-Service-Token") ?? '', { audience: 'authz-service', operation: 'authz.check', url: c.req.url, method: c.req.method, headers: c.req.raw.headers, body }, [{ issuer: 'gateway', keyId: 'g1', publicKey: gatewayIdentity.publicKey }]);
+      if (!valid) return c.json({ allowed: false }, 403);
       return c.json({ ok: true, data: { allowed: true } }, 200);
     });
 

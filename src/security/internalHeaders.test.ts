@@ -1,3 +1,4 @@
+import "../tests/support/internal-request";
 /**
  * SEC-INTERNAL-AUTH-2: Tests for Internal Headers Builder
  *
@@ -136,9 +137,7 @@ describe("internalHeaders", () => {
         { serviceKey: "docs", expectedAud: "doc-service" },
         { serviceKey: "cms", expectedAud: "cms-service" },
         { serviceKey: "cms-core", expectedAud: "cms-service" },
-        { serviceKey: "authz", expectedAud: "authz-service" },
         { serviceKey: "telemetry", expectedAud: "telemetry-service" },
-        { serviceKey: "accounts", expectedAud: "accounts-service" },
       ];
 
       for (const { serviceKey, expectedAud } of testCases) {

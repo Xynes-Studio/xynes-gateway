@@ -1,3 +1,5 @@
+import { gatewayIdentity } from "./support/internal-request";
+import { verifyInternalRequest, internalRequestOperation } from "../security/internalRequest";
 import { describe, it, expect, beforeEach, afterEach, vi, mock } from "bun:test";
 import { signHs256ForTest } from "../testUtils/jwtTestUtils";
 
@@ -76,6 +78,58 @@ describe("Gateway Integration", () => {
     vi.restoreAllMocks();
   });
 
+  it("signs the slug-check accounts request and binds its authenticated actor", async () => {
+    const token = await signHs256ForTest({ sub: "user-1", exp: 2000000000 }, "test-jwt-secret");
+    let calls = 0;
+    global.fetch = Object.assign(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("/internal/accounts-actions")) {
+        calls++;
+        const headers = new Headers(init?.headers);
+        expectInternalAuth(url, init, headers);
+        expect(headers.get("X-XS-User-Id")).toBe("user-1");
+        expect(headers.get("X-Request-Id")).toBeTruthy();
+        expect(headers.get("Authorization")).toBeNull();
+        expect(JSON.parse(String(init?.body))).toEqual({ actionKey: "accounts.workspaces.listForUser", payload: {} });
+        return Response.json({ data: { workspaces: [{ slug: null }, { slug: "acme" }] } });
+      }
+      return Response.json({ ok: true });
+    }, { preconnect: originalFetch.preconnect });
+    const app = await createTestApp();
+    const response = await app.request("/workspaces/check-slug/ACME", { headers: { Authorization: `Bearer ${token}` } });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ available: false });
+    expect(calls).toBe(1);
+  });
+
+  it("handles slug-check response contracts and unavailable accounts safely", async () => {
+    const token = await signHs256ForTest({ sub: "user-1", exp: 2000000000 }, "test-jwt-secret");
+    const app = await createTestApp();
+    for (const [body, status, expected] of [
+      [JSON.stringify({ workspaces: [{ slug: "acme" }] }), 200, { available: false }],
+      [JSON.stringify({ data: { workspaces: [] }, workspaces: [{ slug: "acme" }] }), 200, { available: true }],
+      [JSON.stringify({ data: { workspaces: [null, 7, { slug: 3 }] } }), 200, { available: true }],
+      ["invalid-json", 200, { available: true }],
+      ["null", 200, { available: true }],
+      ["unavailable", 503, { available: true, checked: false }],
+    ] as const) {
+      global.fetch = Object.assign(async (input: string | URL | Request) => String(input).includes("/internal/accounts-actions") ? new Response(body, { status }) : Response.json({ ok: true }), { preconnect: originalFetch.preconnect });
+      const response = await app.request("/workspaces/check-slug/acme", { headers: { Authorization: `Bearer ${token}` } });
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual(expected);
+    }
+  });
+
+  it("rejects slug checks without a verified user before forwarding", async () => {
+    const app = await createTestApp();
+    const withoutUser = await signHs256ForTest({ exp: 2000000000 }, "test-jwt-secret");
+    for (const credential of ["", "Bearer invalid", `Bearer ${withoutUser}`]) {
+      const response = await app.request("/workspaces/check-slug/acme", { headers: { Authorization: credential } });
+      expect(response.status).toBe(401);
+      expect(await response.json()).toEqual({ available: false });
+    }
+  });
+
   it("GET /health returns 200 OK with the HEALTHCHECK contract shape (H-1)", async () => {
     pingDbMock.mockResolvedValueOnce(undefined);
     const app = await createTestApp();
@@ -90,6 +144,27 @@ describe("Gateway Integration", () => {
     expect(typeof body.uptime_seconds).toBe("number");
     expect(Number.isFinite(body.uptime_seconds as number)).toBe(true);
     expect(body.checks).toMatchObject({ db: "ok", route_table: "ok" });
+  });
+
+  it("returns a redacted 500 for a protected route when the signing identity is misconfigured", async () => {
+    const savedFile = process.env.INTERNAL_REQUEST_PRIVATE_KEY_FILE;
+    const token = await signHs256ForTest({ sub: "user-1", exp: 2000000000 }, "test-jwt-secret");
+    const forwarded: string[] = [];
+    global.fetch = Object.assign(async (input: string | URL | Request) => {
+      forwarded.push(String(input));
+      return Response.json({ ok: true });
+    }, { preconnect: originalFetch.preconnect });
+    try {
+      process.env.INTERNAL_REQUEST_PRIVATE_KEY_FILE = "/nonexistent/private-identity.pem";
+      const app = await createTestApp();
+      const response = await app.request("/workspaces/ws-1/members", { headers: { Authorization: `Bearer ${token}` } });
+      expect(response.status).toBe(500);
+      expect(await response.json()).toMatchObject({ ok: false, error: { code: "INTERNAL_SERVER_ERROR", message: "An unexpected error occurred" } });
+      expect(forwarded.some((url) => url.includes("/authz/check") || url.includes("/internal/accounts-actions"))).toBe(false);
+    } finally {
+      if (savedFile === undefined) delete process.env.INTERNAL_REQUEST_PRIVATE_KEY_FILE;
+      else process.env.INTERNAL_REQUEST_PRIVATE_KEY_FILE = savedFile;
+    }
   });
 
   it("fails startup when DATABASE_URL is missing and no route repository is injected", async () => {
@@ -287,9 +362,7 @@ describe("Gateway Integration", () => {
       const urlStr = url.toString();
       if (urlStr.includes("/authz/check")) {
         const headers = new Headers(init?.headers);
-        expect(headers.get("X-Internal-Service-Token")).toBe(
-          "test-internal-token",
-        );
+        expectInternalAuth(urlStr, init, headers);
         const body = JSON.parse(String(init?.body || "{}")) as {
           userId?: string;
           workspaceId?: string;
@@ -306,9 +379,7 @@ describe("Gateway Integration", () => {
       if (urlStr.includes("/internal/doc-actions")) {
         // Updated to match new DynamicRouter logic
         const headers = new Headers(init?.headers);
-        expect(headers.get("X-Internal-Service-Token")).toBe(
-          "test-internal-token",
-        );
+        expectInternalAuth(urlStr, init, headers);
         expect(headers.get("X-Workspace-Id")).toBe("workspace-1");
         expect(headers.get("X-XS-User-Id")).toBe("user-1");
         return Promise.resolve(
@@ -382,9 +453,7 @@ describe("Gateway Integration", () => {
       }
       if (urlStr.includes("/internal/accounts-actions")) {
         const headers = new Headers(init?.headers);
-        expect(headers.get("X-Internal-Service-Token")).toBe(
-          "test-internal-token",
-        );
+        expectInternalAuth(urlStr, init, headers);
         expect(headers.get("X-Workspace-Id")).toBeNull();
         expect(headers.get("X-XS-User-Id")).toBe("user-1");
         expect(headers.get("X-XS-User-Email")).toBe("user-1@example.com");
@@ -519,9 +588,7 @@ describe("Gateway Integration", () => {
       }
       if (urlStr.includes("/internal/accounts-actions")) {
         const headers = new Headers(init?.headers);
-        expect(headers.get("X-Internal-Service-Token")).toBe(
-          "test-internal-token",
-        );
+        expectInternalAuth(urlStr, init, headers);
         expect(headers.get("X-Workspace-Id")).toBeNull();
         expect(headers.get("X-XS-User-Id")).toBe("user-1");
         expect(headers.get("X-XS-User-Email")).toBe("user-1@example.com");
@@ -599,9 +666,7 @@ describe("Gateway Integration", () => {
       const urlStr = url.toString();
       if (urlStr.includes("/authz/check")) {
         const headers = new Headers(init?.headers);
-        expect(headers.get("X-Internal-Service-Token")).toBe(
-          "test-internal-token",
-        );
+        expectInternalAuth(urlStr, init, headers);
         const body = JSON.parse(String(init?.body || "{}")) as {
           userId?: string;
           workspaceId?: string | null;
@@ -618,9 +683,7 @@ describe("Gateway Integration", () => {
       }
       if (urlStr.includes("/internal/accounts-actions")) {
         const headers = new Headers(init?.headers);
-        expect(headers.get("X-Internal-Service-Token")).toBe(
-          "test-internal-token",
-        );
+        expectInternalAuth(urlStr, init, headers);
         expect(headers.get("X-Workspace-Id")).toBeNull();
         expect(headers.get("X-XS-User-Id")).toBe("user-1");
 
@@ -670,9 +733,7 @@ describe("Gateway Integration", () => {
       const urlStr = url.toString();
       if (urlStr.includes("/authz/check")) {
         const headers = new Headers(init?.headers);
-        expect(headers.get("X-Internal-Service-Token")).toBe(
-          "test-internal-token",
-        );
+        expectInternalAuth(urlStr, init, headers);
         const body = JSON.parse(String(init?.body || "{}")) as {
           userId?: string;
           workspaceId?: string | null;
@@ -691,9 +752,7 @@ describe("Gateway Integration", () => {
       }
       if (urlStr.includes("/internal/accounts-actions")) {
         const headers = new Headers(init?.headers);
-        expect(headers.get("X-Internal-Service-Token")).toBe(
-          "test-internal-token",
-        );
+        expectInternalAuth(urlStr, init, headers);
         expect(headers.get("X-Workspace-Id")).toBe("workspace-1");
         expect(headers.get("X-XS-User-Id")).toBe("user-1");
 
@@ -818,9 +877,7 @@ describe("Gateway Integration", () => {
       }
       if (urlStr.includes("/internal/cms-actions")) {
         const headers = new Headers(init?.headers);
-        expect(headers.get("X-Internal-Service-Token")).toBe(
-          "test-internal-token",
-        );
+        expectInternalAuth(urlStr, init, headers);
         expect(headers.get("X-Workspace-Id")).toBe("workspace-1");
         expect(headers.get("X-XS-User-Id")).toBe("user-1");
 
@@ -953,9 +1010,7 @@ describe("Gateway Integration", () => {
       }
       if (urlStr.includes("/internal/accounts-actions")) {
         const headers = new Headers(init?.headers);
-        expect(headers.get("X-Internal-Service-Token")).toBe(
-          "test-internal-token",
-        );
+        expectInternalAuth(urlStr, init, headers);
         expect(headers.get("X-Workspace-Id")).toBeNull();
 
         const body = JSON.parse(String(init?.body || "{}")) as {
@@ -1018,9 +1073,7 @@ describe("Gateway Integration", () => {
       }
       if (urlStr.includes("/internal/accounts-actions")) {
         const headers = new Headers(init?.headers);
-        expect(headers.get("X-Internal-Service-Token")).toBe(
-          "test-internal-token",
-        );
+        expectInternalAuth(urlStr, init, headers);
         expect(headers.get("X-Workspace-Id")).toBeNull();
         expect(headers.get("X-XS-User-Id")).toBeNull();
 
@@ -1096,9 +1149,7 @@ describe("Gateway Integration", () => {
       }
       if (urlStr.includes("/internal/accounts-actions")) {
         const headers = new Headers(init?.headers);
-        expect(headers.get("X-Internal-Service-Token")).toBe(
-          "test-internal-token",
-        );
+        expectInternalAuth(urlStr, init, headers);
         expect(headers.get("X-Workspace-Id")).toBeNull();
         expect(headers.get("X-XS-User-Id")).toBe("user-1");
 
@@ -1172,9 +1223,7 @@ describe("Gateway Integration", () => {
       }
       if (urlStr.includes("/internal/cms-actions")) {
         const headers = new Headers(init?.headers);
-        expect(headers.get("X-Internal-Service-Token")).toBe(
-          "test-internal-token",
-        );
+        expectInternalAuth(urlStr, init, headers);
         expect(headers.get("X-Workspace-Id")).toBe("workspace-1");
         expect(headers.get("X-XS-User-Id")).toBeNull();
 
@@ -1223,9 +1272,7 @@ describe("Gateway Integration", () => {
       }
       if (urlStr.includes("/internal/cms-actions")) {
         const headers = new Headers(init?.headers);
-        expect(headers.get("X-Internal-Service-Token")).toBe(
-          "test-internal-token",
-        );
+        expectInternalAuth(urlStr, init, headers);
         expect(headers.get("X-Workspace-Id")).toBe("workspace-1");
 
         const body = JSON.parse(String(init?.body || "{}")) as {
@@ -1263,9 +1310,7 @@ describe("Gateway Integration", () => {
       }
       if (urlStr.includes("/internal/cms-actions")) {
         const headers = new Headers(init?.headers);
-        expect(headers.get("X-Internal-Service-Token")).toBe(
-          "test-internal-token",
-        );
+        expectInternalAuth(urlStr, init, headers);
         expect(headers.get("X-Workspace-Id")).toBe("workspace-1");
 
         const body = JSON.parse(String(init?.body || "{}")) as {
@@ -1307,9 +1352,7 @@ describe("Gateway Integration", () => {
       }
       if (urlStr.includes("/internal/cms-actions")) {
         const headers = new Headers(init?.headers);
-        expect(headers.get("X-Internal-Service-Token")).toBe(
-          "test-internal-token",
-        );
+        expectInternalAuth(urlStr, init, headers);
         expect(headers.get("X-Workspace-Id")).toBe("workspace-1");
 
         const body = JSON.parse(String(init?.body || "{}")) as {
@@ -1407,9 +1450,7 @@ describe("Gateway Integration", () => {
           }
           if (urlStr.includes("/internal/cms-actions")) {
             const headers = new Headers(init?.headers);
-            expect(headers.get("X-Internal-Service-Token")).toBe(
-              "test-internal-token",
-            );
+            expectInternalAuth(urlStr, init, headers);
             expect(headers.get("X-Workspace-Id")).toBe("workspace-123");
 
             const body = JSON.parse(String(init?.body || "{}")) as {
@@ -2093,3 +2134,13 @@ describe("Gateway Integration", () => {
     });
   });
 });
+
+function expectInternalAuth(url: string, init: RequestInit | undefined, headers: Headers) {
+  if (url.includes('/authz/check') || url.includes('/internal/accounts-actions')) {
+    const audience = url.includes('/authz/check') ? 'authz-service' : 'accounts-service';
+    const body = String(init?.body ?? '');
+    expect(verifyInternalRequest(headers.get('X-Internal-Service-Token') ?? '', { audience, operation: internalRequestOperation(audience, new URL(url).pathname, body), url, method: 'POST', body, headers }, [{ issuer: 'gateway', keyId: 'g1', publicKey: gatewayIdentity.publicKey }])).toBe(true);
+  } else {
+    expect(headers.get('X-Internal-Service-Token')).toBe('test-internal-token');
+  }
+}

@@ -1,6 +1,8 @@
+import "../tests/support/internal-request";
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'bun:test';
 import { AuthzService } from './authzService';
+import { InternalRequestConfigError } from '../security/internalRequest';
 
 describe('AuthzService', () => {
   let service: AuthzService;
@@ -23,14 +25,14 @@ describe('AuthzService', () => {
 
     const result = await service.check('user-1', 'ws-1', 'action:read');
     expect(result).toBe(true);
-    expect(global.fetch).toHaveBeenCalledWith('http://mock-authz/authz/check', expect.objectContaining({
-      method: 'POST',
-      headers: expect.objectContaining({
-        'Content-Type': 'application/json',
-        'X-Internal-Service-Token': 'test-internal-token',
-      }),
-      body: JSON.stringify({ userId: 'user-1', workspaceId: 'ws-1', actionKey: 'action:read' })
-    }));
+    const calls = fetchMock.mock.calls;
+    expect(calls[0]?.[0]).toBe('http://mock-authz/authz/check');
+    const init: RequestInit = calls[0]?.[1];
+    const headers = new Headers(init.headers);
+    expect(headers.get('Content-Type')).toBe('application/json');
+    expect(headers.get('X-Internal-Service-Token')).not.toBe('test-internal-token');
+    expect(headers.get('X-XS-User-Id')).toBe('user-1');
+    expect(init.body).toBe(JSON.stringify({ userId: 'user-1', workspaceId: 'ws-1', actionKey: 'action:read' }));
   });
 
   it('should return false if authz service denies (allowed: false)', async () => {
@@ -72,5 +74,26 @@ describe('AuthzService', () => {
 
     const result = await service.check('user-1', 'ws-1', 'action:create');
     expect(result).toBe(false);
+  });
+
+  it('propagates identity misconfiguration without making a permission request', async () => {
+    const savedFile = process.env.INTERNAL_REQUEST_PRIVATE_KEY_FILE;
+    const savedId = process.env.INTERNAL_REQUEST_KEY_ID;
+    try {
+      for (const failure of ['missing-file', 'unreadable-file', 'missing-key-id']) {
+        process.env.INTERNAL_REQUEST_PRIVATE_KEY_FILE = savedFile;
+        process.env.INTERNAL_REQUEST_KEY_ID = savedId;
+        if (failure === 'missing-file') delete process.env.INTERNAL_REQUEST_PRIVATE_KEY_FILE;
+        if (failure === 'unreadable-file') process.env.INTERNAL_REQUEST_PRIVATE_KEY_FILE = '/nonexistent/sec003-private.pem';
+        if (failure === 'missing-key-id') delete process.env.INTERNAL_REQUEST_KEY_ID;
+        await expect(service.check('user-1', 'ws-1', 'action:read')).rejects.toBeInstanceOf(InternalRequestConfigError);
+        expect(global.fetch).not.toHaveBeenCalled();
+      }
+    } finally {
+      if (savedFile === undefined) delete process.env.INTERNAL_REQUEST_PRIVATE_KEY_FILE;
+      else process.env.INTERNAL_REQUEST_PRIVATE_KEY_FILE = savedFile;
+      if (savedId === undefined) delete process.env.INTERNAL_REQUEST_KEY_ID;
+      else process.env.INTERNAL_REQUEST_KEY_ID = savedId;
+    }
   });
 });
