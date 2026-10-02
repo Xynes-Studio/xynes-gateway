@@ -835,11 +835,17 @@ export class DynamicRouter {
       DynamicRouter.copySafe(payload, body);
     }
 
+    const cmsDelivery =
+      ["cms-core", "cms_core", "cmscore"].includes(serviceKeyNormalized) &&
+      ["cms.delivery.listByDirectory", "cms.delivery.getById"].includes(actionKey);
     const safeQuery: Record<string, unknown> = Object.create(null);
     for (const [key, value] of Object.entries(query)) {
       if (DynamicRouter.UNSAFE_PAYLOAD_KEYS.has(key)) continue;
       if (key === "workspaceId") continue;
-      safeQuery[key] = DynamicRouter.coerceQueryValue(value);
+      safeQuery[key] =
+        cmsDelivery && key === "search"
+          ? value
+          : DynamicRouter.coerceQueryValue(value);
     }
     DynamicRouter.copySafe(payload, safeQuery);
 
@@ -898,7 +904,7 @@ export class DynamicRouter {
     }
 
     // Wrap response in standard envelope
-    return this.wrapResponse(response, reqId);
+    return this.wrapResponse(response, reqId, cmsDelivery);
   }
 
   /**
@@ -907,15 +913,31 @@ export class DynamicRouter {
   private async wrapResponse(
     response: Response,
     requestId: string,
+    cmsDelivery = false,
   ): Promise<Response> {
     const status = response.status;
 
     try {
-      const body = await response.json();
+      const body: unknown = await response.json();
 
       if (status >= 200 && status < 300) {
-        // Success: wrap data in ApiSuccess envelope
-        const successResponse = createSuccessResponse(body, requestId);
+        // A1 delivery already has a CMS envelope. Normalize only these new routes.
+        if (
+          cmsDelivery &&
+          (!DynamicRouter.isPlainRecord(body) ||
+            body.ok !== true ||
+            !DynamicRouter.isPlainRecord(body.data))
+        ) {
+          return new Response(
+            JSON.stringify(createErrorResponse(
+              "BAD_GATEWAY", "Invalid CMS delivery response", requestId,
+            )),
+            { status: 502, headers: { "Content-Type": "application/json" } },
+          );
+        }
+        const data =
+          cmsDelivery && DynamicRouter.isPlainRecord(body) ? body.data : body;
+        const successResponse = createSuccessResponse(data, requestId);
         return new Response(JSON.stringify(successResponse), {
           status,
           headers: { "Content-Type": "application/json" },
