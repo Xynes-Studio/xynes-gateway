@@ -43,6 +43,21 @@ describe("CMS delivery transport", () => {
     expect(values[0]?.search).toBe(123);
     expect(await response.json()).toEqual({ok: true, data: envelope, meta: {requestId: "fixture-request-id"}});
   });
+  it("maps empty or malformed delivery success JSON to BAD_GATEWAY", async () => {
+    const fetchSpy = spyOn(globalThis, "fetch");
+    for (const action of ["cms.delivery.listByDirectory", "cms.delivery.getById"]) {
+      for (const body of ["", "{broken"]) {
+        fetchSpy.mockImplementation(fixtureFetch(async () => new Response(body, {status: 200})));
+        const response = await proxy(action);
+        expect(response.status).toBe(502);
+        expect(await response.json()).toEqual({ok: false, error: {code: "BAD_GATEWAY", message: "Invalid CMS delivery response"}, meta: {requestId: "fixture-request-id"}});
+      }
+    }
+    fetchSpy.mockImplementation(fixtureFetch(async () => new Response("{broken", {status: 404})));
+    expect((await proxy("cms.delivery.getById")).status).toBe(404);
+    fetchSpy.mockImplementation(fixtureFetch(async () => new Response("{broken", {status: 200})));
+    expect((await proxy("cms.content.listPublished")).status).toBe(500);
+  });
   it("fails closed for malformed delivery success responses and preserves upstream error envelopes", async () => {
     const fetchSpy = spyOn(globalThis, "fetch");
     for (const body of [{items: []}, {ok: false, data: {}}, {ok: true}, {ok: true, data: null}]) {

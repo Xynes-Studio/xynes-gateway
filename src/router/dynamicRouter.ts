@@ -916,6 +916,12 @@ export class DynamicRouter {
     cmsDelivery = false,
   ): Promise<Response> {
     const status = response.status;
+    const invalidDeliveryResponse = () => new Response(
+      JSON.stringify(createErrorResponse(
+        "BAD_GATEWAY", "Invalid CMS delivery response", requestId,
+      )),
+      { status: 502, headers: { "Content-Type": "application/json" } },
+    );
 
     try {
       const body: unknown = await response.json();
@@ -928,12 +934,7 @@ export class DynamicRouter {
             body.ok !== true ||
             !DynamicRouter.isPlainRecord(body.data))
         ) {
-          return new Response(
-            JSON.stringify(createErrorResponse(
-              "BAD_GATEWAY", "Invalid CMS delivery response", requestId,
-            )),
-            { status: 502, headers: { "Content-Type": "application/json" } },
-          );
+          return invalidDeliveryResponse();
         }
         const data =
           cmsDelivery && DynamicRouter.isPlainRecord(body) ? body.data : body;
@@ -961,6 +962,9 @@ export class DynamicRouter {
         });
       }
     } catch {
+      if (cmsDelivery && status >= 200 && status < 300) {
+        return invalidDeliveryResponse();
+      }
       // If body parsing fails, return generic error
       const errorCode = mapStatusToErrorCode(status);
       const errorMessage = getDefaultMessageForCode(errorCode);
