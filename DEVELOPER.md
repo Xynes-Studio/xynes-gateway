@@ -1868,3 +1868,12 @@ SEC-003 PR feedback: `AuthzService.check` propagates `InternalRequestConfigError
 to the app's redacted 500 handler. Do not convert local signing configuration
 failures into ordinary permission denials. Unit and HTTP regressions ensure no
 forwarding occurs; genuine denials and network-failure behavior remain closed.
+
+
+### CMS delivery transport (CMS-INT-A3)
+
+Only `cms.delivery.listByDirectory` and `cms.delivery.getById` on the CMS service aliases receive this transport adjustment. Preserve `search` query values as strings, including numeric/boolean-looking text; continue existing number coercion for pagination. CMS delivery already returns `{ok:true,data:...}`, so validate that upstream success envelope and retain a single gateway envelope with the gateway request ID. Invalid, empty or malformed JSON upstream delivery success produces 502 `BAD_GATEWAY`; existing upstream error semantics and all other route envelopes/query coercion remain unchanged.
+
+A3 adds no route seeds, key resolver, scope grants or custom credential path. A4 owns workspace-scoped routes `/workspaces/:workspaceId/delivery/entries` and `/workspaces/:workspaceId/delivery/entries/:entryId`, permission wiring and preset scopes. Deploy this patch alongside the CMS implementation, after its approved migration 0009, when A4 wiring is ready. No live route registration or deployment was performed during A3.
+
+`src/router/dynamicRouter.delivery.test.ts` covers preserved search strings, numeric pagination, both action envelopes, unchanged legacy routes and malformed upstream/error responses. Fresh configured coverage: 692 tests pass; overall 95.75% lines / 95.27% functions; `dynamicRouter.ts` 99.42% lines / 87.50% functions on the final source. Typecheck and Bun build pass. ESLint exits zero with 33 pre-existing warnings and no errors. Branch coverage is unavailable in Bun's report. The CMS isolated gateway integration builds this actual source with fixture routes and verifies published persistence, query/projection/path boundaries and response serialization; it does not claim deployed API-key scope coverage.
