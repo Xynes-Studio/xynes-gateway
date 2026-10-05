@@ -109,12 +109,11 @@ export class GatewayLogDispatcher {
           await this.sendLegacyEvent(log);
         }
         return;
-      } catch (error) {
+      } catch {
         attempt += 1;
-        const message = error instanceof Error ? error.message : String(error);
         if (attempt > this.maxRetries) {
           console.error(
-            `[GatewayLogDispatcher] failed requestId=${log.requestId} after ${attempt} attempts: ${message}`,
+            `[GatewayLogDispatcher] failed requestId=${log.requestId} after ${attempt} attempts`,
           );
           return;
         }
@@ -125,11 +124,10 @@ export class GatewayLogDispatcher {
     }
   }
 
-  private buildHeaders(log: GatewayAccessLogV1): Headers {
+  private buildHeaders(log: GatewayAccessLogV1, action: ActionBody, url: string, body: string): Headers {
     return buildInternalHeaders(new Headers(), {
-      internalServiceToken: config.internalServiceToken,
-      internalJwtSigningKey: config.internalJwtSigningKey,
       serviceKey: "telemetry-service",
+      boundRequest: { method: "POST", url, body, operation: action.actionKey },
       requestId: log.requestId,
       workspaceId: log.workspaceId ?? null,
       userId: log.userId ?? null,
@@ -137,19 +135,21 @@ export class GatewayLogDispatcher {
   }
 
   private async sendAction(log: GatewayAccessLogV1, action: ActionBody): Promise<void> {
+    const url = `${config.services.telemetry}/internal/telemetry-actions`;
+    const body = JSON.stringify(action);
     const response = await fetch(
-      `${config.services.telemetry}/internal/telemetry-actions`,
+      url,
       {
         method: "POST",
-        headers: this.buildHeaders(log),
-        body: JSON.stringify(action),
+        headers: this.buildHeaders(log, action, url, body),
+        body,
+        signal: AbortSignal.timeout(5000),
       },
     );
 
     if (!response.ok) {
-      const body = await response.text();
       throw new Error(
-        `telemetry action ${action.actionKey} failed with ${response.status}: ${body}`,
+        `telemetry action ${action.actionKey} failed with ${response.status}`,
       );
     }
   }

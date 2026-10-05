@@ -1,4 +1,5 @@
-import "../tests/support/internal-request";
+import { gatewayIdentity } from "../tests/support/internal-request";
+import { verifyInternalRequest } from "../security/internalRequest";
 import { describe, it, expect, beforeEach, afterEach, vi, mock } from "bun:test";
 import type { Route, RouteMatch } from "../types";
 import type { IAuthzService } from "../services/authzService";
@@ -412,9 +413,10 @@ describe("DynamicRouter", () => {
       const headers = callArgs[1].headers as Headers;
       expect(headers.get("X-XS-User-Id")).toBe("user-1");
       expect(headers.get("X-Workspace-Id")).toBe("123");
-      expect(headers.get("X-Internal-Service-Token")).toBe(
-        "test-internal-token",
-      );
+      expect(verifyInternalRequest(headers.get('X-Internal-Service-Token') ?? '', {
+        audience: 'doc-service', operation: 'docs.document.create',
+        url: String(callArgs[0]), method: 'POST', body: String(callArgs[1].body), headers,
+      }, [{ issuer: 'gateway', keyId: 'g1', publicKey: gatewayIdentity.publicKey }])).toBe(true);
       expect(headers.get("User-Agent")).toBe("test-agent");
 
       expect(response.status).toBe(201);

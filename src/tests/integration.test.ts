@@ -2136,11 +2136,8 @@ describe("Gateway Integration", () => {
 });
 
 function expectInternalAuth(url: string, init: RequestInit | undefined, headers: Headers) {
-  if (url.includes('/authz/check') || url.includes('/internal/accounts-actions')) {
-    const audience = url.includes('/authz/check') ? 'authz-service' : 'accounts-service';
-    const body = String(init?.body ?? '');
-    expect(verifyInternalRequest(headers.get('X-Internal-Service-Token') ?? '', { audience, operation: internalRequestOperation(audience, new URL(url).pathname, body), url, method: 'POST', body, headers }, [{ issuer: 'gateway', keyId: 'g1', publicKey: gatewayIdentity.publicKey }])).toBe(true);
-  } else {
-    expect(headers.get('X-Internal-Service-Token')).toBe('test-internal-token');
-  }
+  const path = new URL(url).pathname;
+  const audience = path.includes('authz') ? 'authz-service' : path.includes('accounts') ? 'accounts-service' : path.includes('cms') ? 'cms-service' : path.includes('doc') ? 'doc-service' : path.includes('storage') ? 'storage-service' : 'telemetry-service';
+  const body = String(init?.body ?? '');
+  expect(verifyInternalRequest(headers.get('X-Internal-Service-Token') ?? '', { audience, operation: internalRequestOperation(audience, path, body), url, method: 'POST', body, headers }, [{ issuer: 'gateway', keyId: 'g1', publicKey: gatewayIdentity.publicKey }])).toBe(true);
 }

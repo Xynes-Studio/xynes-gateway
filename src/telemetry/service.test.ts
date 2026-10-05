@@ -1,3 +1,4 @@
+import "../tests/support/internal-request";
 import { describe, it, expect, beforeEach, afterEach, vi } from "bun:test";
 import type { HttpRequestTelemetryInput } from "./sanitize";
 import { GatewayTelemetryService } from "./service";
@@ -187,7 +188,7 @@ describe("GatewayTelemetryService (TELE-GW-1)", () => {
       global.fetch = mockFetch as unknown as typeof fetch;
     });
 
-    it("should log error when telemetry request fails", async () => {
+    it("should log a redacted error when telemetry request fails", async () => {
       const consoleSpy = vi
         .spyOn(console, "error")
         .mockImplementation(() => {});
@@ -205,7 +206,8 @@ describe("GatewayTelemetryService (TELE-GW-1)", () => {
       await new Promise((resolve) => setTimeout(resolve, 100));
 
       expect(consoleSpy).toHaveBeenCalled();
-      expect(consoleSpy.mock.calls[0]?.[0]).toContain("Network error");
+      expect(consoleSpy.mock.calls[0]?.[0]).toContain("Internal telemetry delivery failed");
+      expect(consoleSpy.mock.calls[0]?.[0]).not.toContain("Network error");
 
       consoleSpy.mockRestore();
       global.fetch = mockFetch as unknown as typeof fetch;

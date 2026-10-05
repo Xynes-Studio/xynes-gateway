@@ -1,5 +1,5 @@
 import { gatewayIdentity } from "./support/internal-request";
-import { verifyInternalRequest } from "../security/internalRequest";
+import { verifyInternalRequest, internalRequestAudience, internalRequestOperation } from "../security/internalRequest";
 import { describe, it, expect, beforeAll, afterAll, vi, mock } from "bun:test";
 import { Hono } from "hono";
 import type { Context } from "hono";
@@ -50,7 +50,7 @@ describe("SEC-INT-1 internal auth (stack)", () => {
   let telemetryApp: Hono;
   let telemetryCalls = 0;
 
-  const requireToken = (c: Context): Response | null => {
+  const requireToken = async (c: Context): Promise<Response | null> => {
     const provided = c.req.header("X-Internal-Service-Token");
     if (!provided) {
       return c.json(
@@ -58,7 +58,12 @@ describe("SEC-INT-1 internal auth (stack)", () => {
         401
       );
     }
-    if (provided !== token) {
+    const audience = internalRequestAudience(c.req.path.includes('doc-actions') ? 'docs' : c.req.path.includes('cms-actions') ? 'cms' : 'telemetry');
+    const body = await c.req.raw.clone().text();
+    if (!audience || !verifyInternalRequest(provided, {
+      audience, operation: internalRequestOperation(audience, c.req.path, body),
+      url: c.req.url, method: c.req.method, headers: c.req.raw.headers, body,
+    }, [{ issuer: 'gateway', keyId: 'g1', publicKey: gatewayIdentity.publicKey }])) {
       return c.json(
         { ok: false, error: { code: "FORBIDDEN", message: "invalid" } },
         403
@@ -78,7 +83,7 @@ describe("SEC-INT-1 internal auth (stack)", () => {
 
     docApp = new Hono();
     docApp.post("/internal/doc-actions", async (c) => {
-      const denied = requireToken(c);
+      const denied = await requireToken(c);
       if (denied) return denied;
       const raw = await c.req.json().catch(() => ({}));
       const echoedActionKey =
@@ -98,7 +103,7 @@ describe("SEC-INT-1 internal auth (stack)", () => {
 
     cmsApp = new Hono();
     cmsApp.post("/internal/cms-actions", async (c) => {
-      const denied = requireToken(c);
+      const denied = await requireToken(c);
       if (denied) return denied;
       const raw = await c.req.json().catch(() => ({}));
       const echoedActionKey =
@@ -110,7 +115,7 @@ describe("SEC-INT-1 internal auth (stack)", () => {
 
     telemetryApp = new Hono();
     telemetryApp.post("/internal/telemetry-actions", async (c) => {
-      const denied = requireToken(c);
+      const denied = await requireToken(c);
       if (denied) return denied;
       telemetryCalls += 1;
       return c.json({ ok: true }, 201);
@@ -127,7 +132,7 @@ describe("SEC-INT-1 internal auth (stack)", () => {
     vi.restoreAllMocks();
   });
 
-  it("gateway succeeds only when internal token is injected", async () => {
+  it("gateway dispatches only with bound receiver identities", async () => {
     telemetryCalls = 0;
 
     global.fetch = vi.fn(

@@ -10,7 +10,9 @@ import "../tests/support/internal-request";
  */
 
 import { describe, it, expect } from "bun:test";
-import { buildInternalHeaders } from "./internalHeaders";
+import { buildInternalHeaders, type InternalHeaderContext } from "./internalHeaders";
+import { gatewayIdentity } from "../tests/support/internal-request";
+import { verifyInternalRequest } from "./internalRequest";
 
 /**
  * Helper to decode base64url without padding
@@ -70,7 +72,7 @@ describe("internalHeaders", () => {
       expect(headers.get("Authorization")).toBeNull();
       expect(headers.get("X-Foo")).toBeNull();
 
-      expect(headers.get("X-Internal-Service-Token")).toBe("real-token");
+      expect(headers.get("X-Internal-Service-Token")).toBeNull();
       expect(headers.get("X-Workspace-Id")).toBe("ws-1");
       expect(headers.get("X-XS-User-Id")).toBe("user-1");
       expect(headers.get("X-Request-Id")).toBe("req_1");
@@ -103,112 +105,50 @@ describe("internalHeaders", () => {
         requestId: "req\rbad",
       });
 
-      expect(headers.get("X-Internal-Service-Token")).toBe("tokbad");
+      expect(headers.get("X-Internal-Service-Token")).toBeNull();
       expect(headers.get("X-Workspace-Id")).toBe("wsbad");
       expect(headers.get("X-XS-User-Id")).toBe("userbad");
       expect(headers.get("X-Request-Id")).toBe("reqbad");
     });
   });
 
-  describe("SEC-INTERNAL-AUTH-2: JWT-based authentication", () => {
-    const JWT_SIGNING_KEY = "test-jwt-signing-key-32-bytes-minimum";
+  describe("bound receiver authentication", () => {
+    const defaultRequest = { url: 'http://docs/internal/doc-actions', method: 'POST', operation: 'docs.document.read', body: JSON.stringify({ actionKey: 'docs.document.read', payload: {} }) };
+    const build = (overrides: Partial<InternalHeaderContext> = {}) => buildInternalHeaders(new Headers(), { serviceKey: 'docs', boundRequest: defaultRequest, requestId: 'req-fixture', ...overrides });
 
-    it("generates JWT token when internalJwtSigningKey and serviceKey are provided", () => {
-      const headers = buildInternalHeaders(new Headers(), {
-        internalJwtSigningKey: JWT_SIGNING_KEY,
-        serviceKey: "docs",
-        requestId: "req-test-123",
-      });
-
-      const token = headers.get("X-Internal-Service-Token");
-      expect(token).not.toBeNull();
-
-      // Verify it's a JWT
-      const parsed = parseJwt(token!);
-      expect(parsed).not.toBeNull();
-      expect(parsed!.header.alg).toBe("HS256");
-      expect(parsed!.payload.aud).toBe("doc-service");
-      expect(parsed!.payload.internal).toBe(true);
-      expect(parsed!.payload.requestId).toBe("req-test-123");
+    it('signs a bound Ed25519 token rather than shared credentials', () => {
+      const headers = build({ internalJwtSigningKey: 'obsolete-shared-fixture', internalServiceToken: 'obsolete-static-fixture' });
+      const token = headers.get('X-Internal-Service-Token') ?? '';
+      expect(verifyInternalRequest(token, { ...defaultRequest, audience: 'doc-service', headers }, [{ issuer: 'gateway', keyId: 'g1', publicKey: gatewayIdentity.publicKey }])).toBe(true);
+      const parsed = parseJwt(token);
+      expect(parsed?.header.alg).toBe('EdDSA');
+      expect(parsed?.header.typ).toBe('xynes-internal-request+jwt');
+      expect(parsed?.payload.iss).toBe('gateway');
     });
-
-    it("maps service keys correctly to audiences", () => {
-      const testCases = [
-        { serviceKey: "docs", expectedAud: "doc-service" },
-        { serviceKey: "cms", expectedAud: "cms-service" },
-        { serviceKey: "cms-core", expectedAud: "cms-service" },
-        { serviceKey: "telemetry", expectedAud: "telemetry-service" },
-      ];
-
-      for (const { serviceKey, expectedAud } of testCases) {
-        const headers = buildInternalHeaders(new Headers(), {
-          internalJwtSigningKey: JWT_SIGNING_KEY,
-          serviceKey,
-          requestId: "req-123",
-        });
-
-        const token = headers.get("X-Internal-Service-Token");
-        const parsed = parseJwt(token!);
-        expect(parsed!.payload.aud).toBe(expectedAud);
+    it('normalizes all receiver aliases', () => {
+      for (const [serviceKey, audience] of [['docs', 'doc-service'], ['doc_service', 'doc-service'], ['cms_core', 'cms-service'], ['accounts_service', 'accounts-service'], ['authz-service', 'authz-service'], ['storage_service', 'storage-service'], ['telemetry', 'telemetry-service']]) {
+        expect(parseJwt(build({ serviceKey }).get('X-Internal-Service-Token') ?? '')?.payload.aud).toBe(audience);
       }
     });
-
-    it("falls back to legacy token for unknown service keys", () => {
-      const headers = buildInternalHeaders(new Headers(), {
-        internalJwtSigningKey: JWT_SIGNING_KEY,
-        internalServiceToken: "legacy-token",
-        serviceKey: "unknown-service",
-        requestId: "req-123",
-      });
-
-      const token = headers.get("X-Internal-Service-Token");
-      expect(token).toBe("legacy-token");
+    it('rejects unknown receivers and missing bound request without legacy fallback', () => {
+      expect(() => build({ serviceKey: 'unknown', internalServiceToken: 'legacy' })).toThrow('misconfigured');
+      expect(() => build({ boundRequest: undefined, internalServiceToken: 'legacy' })).toThrow('misconfigured');
     });
-
-    it("uses legacy token when no JWT signing key is provided", () => {
-      const headers = buildInternalHeaders(new Headers(), {
-        internalServiceToken: "legacy-token",
-        serviceKey: "docs",
-        requestId: "req-123",
-      });
-
-      const token = headers.get("X-Internal-Service-Token");
-      expect(token).toBe("legacy-token");
+    it('uses the distinct private identity without a shared JWT signing key', () => {
+      expect(parseJwt(build().get('X-Internal-Service-Token') ?? '')?.header.alg).toBe('EdDSA');
     });
-
-    it("generates fallback request ID when not provided", () => {
-      const headers = buildInternalHeaders(new Headers(), {
-        internalJwtSigningKey: JWT_SIGNING_KEY,
-        serviceKey: "docs",
-        // requestId not provided
-      });
-
-      const token = headers.get("X-Internal-Service-Token");
-      const parsed = parseJwt(token!);
-      expect(parsed!.payload.requestId).toMatch(/^req-/);
+    it('generates and binds a request ID if absent', () => {
+      const headers = build({ requestId: undefined });
+      expect(headers.get('X-Request-Id')).toBeTruthy();
+      expect(parseJwt(headers.get('X-Internal-Service-Token') ?? '')?.payload.context).toContain(headers.get('X-Request-Id'));
     });
-
-    it("includes exp claim with short TTL", () => {
+    it('retains a bounded 60-second token lifetime', () => {
       const before = Math.floor(Date.now() / 1000);
-      const headers = buildInternalHeaders(new Headers(), {
-        internalJwtSigningKey: JWT_SIGNING_KEY,
-        serviceKey: "docs",
-        requestId: "req-123",
-      });
-      const after = Math.floor(Date.now() / 1000);
-
-      const token = headers.get("X-Internal-Service-Token");
-      const parsed = parseJwt(token!);
-
-      const exp = parsed!.payload.exp as number;
-      const iat = parsed!.payload.iat as number;
-
-      // exp should be ~60 seconds after iat
-      expect(exp - iat).toBe(60);
-
-      // iat should be within our test window
-      expect(iat).toBeGreaterThanOrEqual(before);
-      expect(iat).toBeLessThanOrEqual(after);
+      const parsed = parseJwt(build().get('X-Internal-Service-Token') ?? '');
+      expect(typeof parsed?.payload.exp).toBe('number');
+      expect(typeof parsed?.payload.iat).toBe('number');
+      expect(Number(parsed?.payload.exp) - Number(parsed?.payload.iat)).toBe(60);
+      expect(Number(parsed?.payload.iat)).toBeGreaterThanOrEqual(before);
     });
   });
 });
