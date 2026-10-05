@@ -1,4 +1,5 @@
 import { createHmac, timingSafeEqual, createPublicKey, verify } from "node:crypto";
+import { hasValidJwtClaims, isJwtRecord } from "../security/jwtPolicy";
 import { validateJwksUrlForFetch } from "../security/jwksUrl";
 
 function base64UrlToBase64(input: string): string {
@@ -11,10 +12,11 @@ function base64ToBase64Url(input: string): string {
   return input.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
 }
 
-function base64UrlDecodeJson<T>(input: string): T | null {
+function base64UrlDecodeJson(input: string): Record<string, unknown> | null {
   try {
     const json = Buffer.from(base64UrlToBase64(input), "base64").toString("utf8");
-    return JSON.parse(json) as T;
+    const value: unknown = JSON.parse(json);
+    return isJwtRecord(value) ? value : null;
   } catch {
     return null;
   }
@@ -33,6 +35,7 @@ export interface JwtVerificationOptions {
   nowEpochSeconds?: number;
   jwksTimeoutMs?: number;
   jwksTtlMs?: number;
+  maxTokenLifetimeSeconds?: number;
 }
 
 export interface JwtRequirements {
@@ -41,6 +44,7 @@ export interface JwtRequirements {
 }
 
 function satisfiesJwtRequirements(payload: JwtClaims, requirements?: JwtRequirements): boolean {
+  if (process.env.NODE_ENV === "production" && (!requirements?.issuer?.trim() || !requirements.audience?.trim())) return false;
   if (!requirements) return true;
 
   if (requirements.issuer) {
@@ -72,11 +76,11 @@ export function verifyHs256Jwt(
   const [encodedHeader, encodedPayload, encodedSignature] = parts;
   if (!encodedHeader || !encodedPayload || !encodedSignature) return null;
 
-  const header = base64UrlDecodeJson<Record<string, unknown>>(encodedHeader);
+  const header = base64UrlDecodeJson(encodedHeader);
   if (!header) return null;
   if (header.alg !== "HS256") return null;
 
-  const payload = base64UrlDecodeJson<JwtClaims>(encodedPayload);
+  const payload = base64UrlDecodeJson(encodedPayload);
   if (!payload) return null;
 
   const signingInput = `${encodedHeader}.${encodedPayload}`;
@@ -91,8 +95,7 @@ export function verifyHs256Jwt(
   const now =
     options.nowEpochSeconds ?? Math.floor(Date.now() / 1000);
 
-  if (typeof payload.nbf === "number" && now < payload.nbf) return null;
-  if (typeof payload.exp === "number" && now >= payload.exp) return null;
+  if (!hasValidJwtClaims(payload, now, options.maxTokenLifetimeSeconds)) return null;
 
   if (!satisfiesJwtRequirements(payload, options.requirements)) return null;
 
@@ -111,12 +114,18 @@ export interface Jwks {
   keys: JwksKey[];
 }
 
+function isJwksKey(value: unknown): value is JwksKey {
+  return isJwtRecord(value) && typeof value.kty === "string" &&
+    ["kid", "use", "alg"].every((field) => !(field in value) || typeof value[field] === "string");
+}
+
 export interface JwtVerifierConfig {
   hs256Secret?: string;
   issuer?: string;
   audience?: string;
   publicKeyPem?: string;
   jwksUrl?: string;
+  maxTokenLifetimeSeconds?: number;
 }
 
 const jwksCache = new Map<string, { expiresAt: number; jwks: Jwks }>();
@@ -136,7 +145,8 @@ function resolveJwtPublicKeyFromJwks(jwks: Jwks, kid?: string): ReturnType<typeo
     if (typeof k.alg === "string" && k.alg !== "RS256") return false;
     return true;
   });
-  const key = candidates.length === 1 ? candidates[0] : candidates.find((k) => k.use === "sig") ?? candidates[0];
+  // During rotation a kid must resolve to exactly one eligible signing key.
+  const key = candidates.length === 1 ? candidates[0] : undefined;
   if (!key) return null;
   try {
     return createPublicKey({ key, format: "jwk" });
@@ -212,17 +222,17 @@ async function getJwks(
         return;
       }
 
-      const parsed = (await res.json().catch(() => null)) as unknown;
-      if (!parsed || typeof parsed !== "object") {
+      const parsed: unknown = await res.json().catch(() => null);
+      if (!isJwtRecord(parsed)) {
         resolvePending(null);
         return;
       }
-      if (!("keys" in parsed) || !Array.isArray((parsed as { keys?: unknown }).keys)) {
-        resolvePending?.(null);
+      if (!Array.isArray(parsed.keys) || !parsed.keys.every(isJwksKey)) {
+        resolvePending(null);
         return;
       }
 
-      const jwks = parsed as Jwks;
+      const jwks: Jwks = { keys: parsed.keys };
       jwksCache.set(cacheKey, { jwks, expiresAt: now + ttlMs });
       resolvePending(jwks);
     } catch {
@@ -245,7 +255,7 @@ export async function verifyJwt(
   const [encodedHeader, encodedPayload, encodedSignature] = parts;
   if (!encodedHeader || !encodedPayload || !encodedSignature) return null;
 
-  const header = base64UrlDecodeJson<Record<string, unknown>>(encodedHeader);
+  const header = base64UrlDecodeJson(encodedHeader);
   if (!header) return null;
   const alg = header.alg;
 
@@ -256,16 +266,15 @@ export async function verifyJwt(
 
   if (alg === "HS256") {
     if (!config.hs256Secret) return null;
-    return verifyHs256Jwt(token, config.hs256Secret, { ...options, requirements });
+    return verifyHs256Jwt(token, config.hs256Secret, { ...options, requirements, maxTokenLifetimeSeconds: config.maxTokenLifetimeSeconds ?? options.maxTokenLifetimeSeconds });
   }
 
   if (alg === "RS256") {
-    const payload = base64UrlDecodeJson<JwtClaims>(encodedPayload);
+    const payload = base64UrlDecodeJson(encodedPayload);
     if (!payload) return null;
 
     const now = options.nowEpochSeconds ?? Math.floor(Date.now() / 1000);
-    if (typeof payload.nbf === "number" && now < payload.nbf) return null;
-    if (typeof payload.exp === "number" && now >= payload.exp) return null;
+    if (!hasValidJwtClaims(payload, now, config.maxTokenLifetimeSeconds ?? options.maxTokenLifetimeSeconds)) return null;
     if (!satisfiesJwtRequirements(payload, requirements)) return null;
 
     const signingInput = `${encodedHeader}.${encodedPayload}`;
@@ -279,6 +288,7 @@ export async function verifyJwt(
         return null;
       }
     } else if (config.jwksUrl) {
+      if ("kid" in header && (typeof header.kid !== "string" || !header.kid.trim())) return null;
       const fetcher = options.fetcher ?? fetch;
       const jwks = await getJwks(
         config.jwksUrl,

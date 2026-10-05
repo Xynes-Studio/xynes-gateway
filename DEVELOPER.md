@@ -54,8 +54,8 @@ These conventions are enforced to keep the gateway consistent with broader platf
   - Internal calls must derive `X-XS-User-Id` from `req.auth.userId` only; client-sent `X-XS-*` headers are never trusted.
 
 - **Security-by-default**
-  - JWT validation enforces signature + `exp`/`nbf`.
-  - `iss`/`aud` are enforced when configured; prefer enabling `JWT_REQUIRE_ISS_AUD_IN_PROD=1` in production.
+  - JWT validation requires a signature, nonblank string `sub`, finite integer `iat`/`exp`, a bounded lifetime and valid optional `nbf`.
+  - `iss`/`aud` are enforced when configured and are mandatory in production; the legacy opt-out flag has no effect.
   - JWKS fetching is fail-closed with strict URL policy and no redirects.
 
 - **TDD + Coverage**
@@ -1101,11 +1101,14 @@ Gateway JWT validation is designed to be **fail-closed** when security-relevant 
 
 - **Issuer / Audience**
   - If `JWT_ISSUER` and `JWT_AUDIENCE` are set, gateway enforces `iss` and `aud` checks for both HS256 and RS256.
-  - If either is missing, gateway logs a startup warning and runs in dev-only mode without `iss`/`aud` enforcement.
-  - Optional production guard: set `JWT_REQUIRE_ISS_AUD_IN_PROD=1` to refuse startup in `NODE_ENV=production` unless both are configured.
+  - Production refuses startup and token verification without both values, including when the legacy `JWT_REQUIRE_ISS_AUD_IN_PROD` flag is disabled. Nonproduction warns about missing values and enforces each configured value.
+  - `JWT_MAX_TOKEN_LIFETIME_SECONDS` defaults to 3600; explicit decimal integers from 60 through 86400 are supported. Invalid configuration refuses startup. Match the provider issuance lifetime before rollout.
+  - All access tokens require nonblank string `sub`, nonnegative safe-integer `iat`/`exp`, `iat <= now < exp`, and `0 < exp - iat <= configured maximum`. Optional `nbf` must be an integer within `[iat, exp)` and no later than now; there is no clock-skew grace. Optional issuer/audience values must have valid string shapes; audience arrays must contain nonblank strings.
+  - Set issuer to the exact provider claim (local Supabase normally `http://127.0.0.1:54321/auth/v1`) and audience to `authenticated`. Supabase anon/service-role credentials are not user access tokens.
+  - See `docs/security/2026-10-05-jwt-validation.md` for evidence and infra `infra/release/JWT-VALIDATION-ROLLOUT.md` for migration and explicit key rotation.
 
 - **RS256 JWKS**
-  - If `JWT_JWKS_URL` is set, gateway fetches JWKS with a strict timeout and caches keys in-memory with a TTL (defaults: 3s timeout, 5m TTL).
+  - If `JWT_JWKS_URL` is set, gateway fetches JWKS with a strict timeout and caches keys in-memory with a TTL (defaults: 3s timeout, 5m TTL). JWKS entries must be typed objects, and key selection must be unique; multiple eligible keys require an unambiguous `kid`. Unknown, malformed or duplicated identifiers fail closed.
   - JWKS URL policy:
     - Only `https://` is allowed.
     - Redirects are rejected.
@@ -1271,9 +1274,10 @@ Ensure the following environment variables are set:
 - `TELEMETRY_SERVICE_URL`: URL of the Telemetry Service (default: `http://localhost:3004`)
 - `INTERNAL_REQUEST_PRIVATE_KEY_FILE` and `INTERNAL_REQUEST_KEY_ID`: gateway-owned signing identity for internal calls
 - `JWT_SECRET`: HS256 JWT secret used to validate `Authorization: Bearer <JWT>` and derive `X-XS-User-Id` for protected routes
-- `JWT_ISSUER`: Expected `iss` claim (when set, tokens must match). If missing, gateway logs a startup warning and does not enforce `iss`.
-- `JWT_AUDIENCE`: Expected `aud` claim (when set, tokens must match). If missing, gateway logs a startup warning and does not enforce `aud`.
-- `JWT_REQUIRE_ISS_AUD_IN_PROD`: Optional guard. When set to `1`/`true`, gateway refuses to start in `NODE_ENV=production` unless both `JWT_ISSUER` and `JWT_AUDIENCE` are set.
+- `JWT_ISSUER`: Exact expected `iss` claim. Required in production; configured values are enforced in every environment.
+- `JWT_AUDIENCE`: Expected `aud` claim, normally `authenticated`. Required in production; configured values are enforced in every environment.
+- `JWT_REQUIRE_ISS_AUD_IN_PROD`: Deprecated and ignored; production enforcement cannot be disabled.
+- `JWT_MAX_TOKEN_LIFETIME_SECONDS`: Maximum access-token `exp - iat` (default 3600, explicit integer range 60–86400).
 - `JWT_PUBLIC_KEY`: Optional PEM public key for RS256 validation (alternative to `JWT_JWKS_URL`)
 - `JWT_JWKS_URL`: Optional JWKS URL for RS256 validation. When set, the gateway fetches and caches JWKS in-memory with a TTL; only `https://` URLs are allowed and redirects are rejected. Hostnames must not be `localhost` or a private IP literal (note: DNS resolution is not performed, so ensure your hostname cannot resolve to private IPs).
 

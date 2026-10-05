@@ -79,7 +79,7 @@ describe("Gateway Integration", () => {
   });
 
   it("signs the slug-check accounts request and binds its authenticated actor", async () => {
-    const token = await signHs256ForTest({ sub: "user-1", exp: 2000000000 }, "test-jwt-secret");
+    const token = await signHs256ForTest({ sub: "user-1", exp: Math.floor(Date.now() / 1000) + 300 }, "test-jwt-secret");
     let calls = 0;
     global.fetch = Object.assign(async (input: string | URL | Request, init?: RequestInit) => {
       const url = String(input);
@@ -103,7 +103,7 @@ describe("Gateway Integration", () => {
   });
 
   it("handles slug-check response contracts and unavailable accounts safely", async () => {
-    const token = await signHs256ForTest({ sub: "user-1", exp: 2000000000 }, "test-jwt-secret");
+    const token = await signHs256ForTest({ sub: "user-1", exp: Math.floor(Date.now() / 1000) + 300 }, "test-jwt-secret");
     const app = await createTestApp();
     for (const [body, status, expected] of [
       [JSON.stringify({ workspaces: [{ slug: "acme" }] }), 200, { available: false }],
@@ -122,7 +122,7 @@ describe("Gateway Integration", () => {
 
   it("rejects slug checks without a verified user before forwarding", async () => {
     const app = await createTestApp();
-    const withoutUser = await signHs256ForTest({ exp: 2000000000 }, "test-jwt-secret");
+    const withoutUser = await signHs256ForTest({ exp: Math.floor(Date.now() / 1000) + 300 }, "test-jwt-secret");
     for (const credential of ["", "Bearer invalid", `Bearer ${withoutUser}`]) {
       const response = await app.request("/workspaces/check-slug/acme", { headers: { Authorization: credential } });
       expect(response.status).toBe(401);
@@ -148,7 +148,7 @@ describe("Gateway Integration", () => {
 
   it("returns a redacted 500 for a protected route when the signing identity is misconfigured", async () => {
     const savedFile = process.env.INTERNAL_REQUEST_PRIVATE_KEY_FILE;
-    const token = await signHs256ForTest({ sub: "user-1", exp: 2000000000 }, "test-jwt-secret");
+    const token = await signHs256ForTest({ sub: "user-1", exp: Math.floor(Date.now() / 1000) + 300 }, "test-jwt-secret");
     const forwarded: string[] = [];
     global.fetch = Object.assign(async (input: string | URL | Request) => {
       forwarded.push(String(input));
@@ -352,7 +352,7 @@ describe("Gateway Integration", () => {
   it("should proxy POST /workspaces/:id/documents to doc-service", async () => {
     const app = await createTestApp();
     const token = signHs256ForTest(
-      { sub: "user-1", exp: 2_000_000_000 },
+      { sub: "user-1", exp: Math.floor(Date.now() / 1000) + 300 },
       "test-jwt-secret",
     );
 
@@ -439,7 +439,7 @@ describe("Gateway Integration", () => {
         email: "user-1@example.com",
         name: "User One",
         avatar_url: "https://example.com/u1.png",
-        exp: 2_000_000_000,
+        exp: Math.floor(Date.now() / 1000) + 300,
       },
       "test-jwt-secret",
     );
@@ -517,7 +517,7 @@ describe("Gateway Integration", () => {
         user_metadata: {
           full_name: "User One",
         },
-        exp: 2_000_000_000,
+        exp: Math.floor(Date.now() / 1000) + 300,
       },
       "test-jwt-secret",
     );
@@ -574,7 +574,7 @@ describe("Gateway Integration", () => {
         email: "user-1@example.com",
         name: "User One",
         avatar_url: "https://example.com/u1.png",
-        exp: 2_000_000_000,
+        exp: Math.floor(Date.now() / 1000) + 300,
       },
       "test-jwt-secret",
     );
@@ -658,7 +658,7 @@ describe("Gateway Integration", () => {
   it("should proxy GET /workspaces to accounts-service (auth required, authz called with workspaceId=null)", async () => {
     const app = await createTestApp();
     const token = signHs256ForTest(
-      { sub: "user-1", exp: 2_000_000_000 },
+      { sub: "user-1", exp: Math.floor(Date.now() / 1000) + 300 },
       "test-jwt-secret",
     );
 
@@ -725,7 +725,7 @@ describe("Gateway Integration", () => {
   it("should proxy GET /workspaces/:id/members to accounts-service (auth required, authz called with workspaceId)", async () => {
     const app = await createTestApp();
     const token = signHs256ForTest(
-      { sub: "user-1", exp: 2_000_000_000 },
+      { sub: "user-1", exp: Math.floor(Date.now() / 1000) + 300 },
       "test-jwt-secret",
     );
 
@@ -796,7 +796,7 @@ describe("Gateway Integration", () => {
   it("should proxy GET /workspaces/:workspaceId/telemetry/events to telemetry-service", async () => {
     const app = await createTestApp();
     const token = signHs256ForTest(
-      { sub: "user-1", exp: 2_000_000_000 },
+      { sub: "user-1", exp: Math.floor(Date.now() / 1000) + 300 },
       "test-jwt-secret",
     );
 
@@ -854,7 +854,7 @@ describe("Gateway Integration", () => {
   it("should proxy GET /workspaces/:workspaceId/content-types to cms-core (auth required, query -> payload)", async () => {
     const app = await createTestApp();
     const token = signHs256ForTest(
-      { sub: "user-1", exp: 2_000_000_000 },
+      { sub: "user-1", exp: Math.floor(Date.now() / 1000) + 300 },
       "test-jwt-secret",
     );
 
@@ -933,7 +933,7 @@ describe("Gateway Integration", () => {
   it("should proxy GET /workspaces/:workspaceId/telemetry/stats/routes to telemetry-service", async () => {
     const app = await createTestApp();
     const token = signHs256ForTest(
-      { sub: "user-1", exp: 2_000_000_000 },
+      { sub: "user-1", exp: Math.floor(Date.now() / 1000) + 300 },
       "test-jwt-secret",
     );
 
@@ -987,7 +987,7 @@ describe("Gateway Integration", () => {
   it("should proxy POST /workspaces to accounts-service (auth required, authz called with workspaceId=null)", async () => {
     const app = await createTestApp();
     const token = signHs256ForTest(
-      { sub: "user-1", exp: 2_000_000_000 },
+      { sub: "user-1", exp: Math.floor(Date.now() / 1000) + 300 },
       "test-jwt-secret",
     );
 
@@ -1135,7 +1135,7 @@ describe("Gateway Integration", () => {
   it("should proxy auth-only POST /workspace-invites/:token/accept to accounts.invites.accept", async () => {
     const app = await createTestApp();
     const token = signHs256ForTest(
-      { sub: "user-1", exp: 2_000_000_000 },
+      { sub: "user-1", exp: Math.floor(Date.now() / 1000) + 300 },
       "test-jwt-secret",
     );
     const tokenValue = "xyn_inv_token_abcdef123456";
@@ -1653,7 +1653,7 @@ describe("Gateway Integration", () => {
     it("should return 413 for oversized POST body", async () => {
       const app = await createTestApp();
       const token = signHs256ForTest(
-        { sub: "user-1", exp: 2_000_000_000 },
+        { sub: "user-1", exp: Math.floor(Date.now() / 1000) + 300 },
         "test-jwt-secret",
       );
 
@@ -1706,7 +1706,7 @@ describe("Gateway Integration", () => {
     it("should allow normal-sized POST body within limits", async () => {
       const app = await createTestApp();
       const token = signHs256ForTest(
-        { sub: "user-1", exp: 2_000_000_000 },
+        { sub: "user-1", exp: Math.floor(Date.now() / 1000) + 300 },
         "test-jwt-secret",
       );
 
@@ -1761,7 +1761,7 @@ describe("Gateway Integration", () => {
     it("should return 400 for malformed JSON body", async () => {
       const app = await createTestApp();
       const token = signHs256ForTest(
-        { sub: "user-1", exp: 2_000_000_000 },
+        { sub: "user-1", exp: Math.floor(Date.now() / 1000) + 300 },
         "test-jwt-secret",
       );
 
@@ -1812,7 +1812,7 @@ describe("Gateway Integration", () => {
     it("should reject deeply nested JSON (JSON bomb protection)", async () => {
       const app = await createTestApp();
       const token = signHs256ForTest(
-        { sub: "user-1", exp: 2_000_000_000 },
+        { sub: "user-1", exp: Math.floor(Date.now() / 1000) + 300 },
         "test-jwt-secret",
       );
 
@@ -1900,7 +1900,7 @@ describe("Gateway Integration", () => {
       it("allows a bodyless DELETE with no Content-Length header (200, reaches downstream)", async () => {
         const app = await createTestApp();
         const token = signHs256ForTest(
-          { sub: "user-1", exp: 2_000_000_000 },
+          { sub: "user-1", exp: Math.floor(Date.now() / 1000) + 300 },
           "test-jwt-secret",
         );
 
@@ -1945,7 +1945,7 @@ describe("Gateway Integration", () => {
       it("allows a bodyless POST with no Content-Length header (200, reaches downstream)", async () => {
         const app = await createTestApp();
         const token = signHs256ForTest(
-          { sub: "user-1", exp: 2_000_000_000 },
+          { sub: "user-1", exp: Math.floor(Date.now() / 1000) + 300 },
           "test-jwt-secret",
         );
 
@@ -1993,7 +1993,7 @@ describe("Gateway Integration", () => {
       it("still returns 413 PAYLOAD_TOO_LARGE for an oversized body that DOES declare Content-Length (regression guard)", async () => {
         const app = await createTestApp();
         const token = signHs256ForTest(
-          { sub: "user-1", exp: 2_000_000_000 },
+          { sub: "user-1", exp: Math.floor(Date.now() / 1000) + 300 },
           "test-jwt-secret",
         );
 
@@ -2037,7 +2037,7 @@ describe("Gateway Integration", () => {
       it("still returns 400 INVALID_CONTENT_LENGTH for a malformed Content-Length on a POST (regression guard)", async () => {
         const app = await createTestApp();
         const token = signHs256ForTest(
-          { sub: "user-1", exp: 2_000_000_000 },
+          { sub: "user-1", exp: Math.floor(Date.now() / 1000) + 300 },
           "test-jwt-secret",
         );
 
@@ -2076,7 +2076,7 @@ describe("Gateway Integration", () => {
       it("rejects a streaming body that exceeds the route limit even when Content-Length is absent (streaming-bypass guard)", async () => {
         const app = await createTestApp();
         const token = signHs256ForTest(
-          { sub: "user-1", exp: 2_000_000_000 },
+          { sub: "user-1", exp: Math.floor(Date.now() / 1000) + 300 },
           "test-jwt-secret",
         );
 

@@ -13,13 +13,24 @@ function base64UrlEncodeBytes(bytes: Uint8Array): string {
   return base64ToBase64Url(Buffer.from(bytes).toString("base64"));
 }
 
+// Ordinary access-token fixtures carry an issuance time. Missing-claim security
+// tests deliberately sign raw payloads instead of using this helper.
+function accessTokenFixture(payload: Record<string, unknown>): Record<string, unknown> {
+  return {
+    ...payload,
+    iat: 'iat' in payload ? payload.iat : typeof payload.exp === 'number'
+      ? Math.max(0, payload.exp - 3600)
+      : Math.floor(Date.now() / 1000),
+  };
+}
+
 export function signHs256ForTest(
   payload: Record<string, unknown>,
   secret: string,
 ): string {
   const header = { alg: "HS256", typ: "JWT" };
   const encodedHeader = encodeJson(header);
-  const encodedPayload = encodeJson(payload);
+  const encodedPayload = encodeJson(accessTokenFixture(payload));
   const signingInput = `${encodedHeader}.${encodedPayload}`;
   const signature = createHmac("sha256", secret)
     .update(signingInput)
@@ -37,9 +48,9 @@ export function createRsaKeyPairForTest(): {
     modulusLength: 2048,
   });
 
-  const publicKeyPem = publicKey.export({ type: "spki", format: "pem" }) as string;
-  const privateKeyPem = privateKey.export({ type: "pkcs8", format: "pem" }) as string;
-  const jwk = publicKey.export({ format: "jwk" }) as unknown as Record<string, unknown>;
+  const publicKeyPem = publicKey.export({ type: "spki", format: "pem" }).toString();
+  const privateKeyPem = privateKey.export({ type: "pkcs8", format: "pem" }).toString();
+  const jwk = { ...publicKey.export({ format: "jwk" }) };
 
   return { publicKeyPem, privateKeyPem, jwk };
 }
@@ -51,7 +62,7 @@ export function signRs256ForTest(
 ): string {
   const header = { alg: "RS256", typ: "JWT", ...headerExtra };
   const encodedHeader = encodeJson(header);
-  const encodedPayload = encodeJson(payload);
+  const encodedPayload = encodeJson(accessTokenFixture(payload));
   const signingInput = `${encodedHeader}.${encodedPayload}`;
   const signature = sign("RSA-SHA256", Buffer.from(signingInput), privateKeyPem);
   const encodedSignature = base64UrlEncodeBytes(signature);

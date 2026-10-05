@@ -61,13 +61,14 @@ export async function jwtAuthMiddleware(
   try {
     const claims = await verifyJwt(token, {
       hs256Secret: config.auth.jwtSecret,
+      maxTokenLifetimeSeconds: config.auth.jwtMaxTokenLifetimeSeconds,
       publicKeyPem: config.auth.jwtPublicKey,
       jwksUrl: config.auth.jwksUrl,
       issuer: config.auth.jwtIssuer,
       audience: config.auth.jwtAudience,
     });
 
-    if (!claims || !claims.sub) {
+    if (!claims || typeof claims.sub !== "string" || !claims.sub.trim()) {
       return c.json(
         {
           ok: false,
@@ -78,7 +79,7 @@ export async function jwtAuthMiddleware(
     }
 
     // Set user context
-    const userId = String(claims.sub);
+    const userId = claims.sub;
     c.set("userId", userId);
 
     // Set optional workspace context
@@ -88,8 +89,8 @@ export async function jwtAuthMiddleware(
     }
 
     await next();
-  } catch (error) {
-    console.error("[jwtAuthMiddleware] JWT verification failed:", error);
+  } catch {
+    console.error("[jwtAuthMiddleware] JWT verification failed");
     return c.json(
       {
         ok: false,

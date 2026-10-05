@@ -462,6 +462,7 @@ export class DynamicRouter {
 
       const claims = await verifyJwt(token, {
         hs256Secret: config.auth?.jwtSecret,
+        maxTokenLifetimeSeconds: config.auth?.jwtMaxTokenLifetimeSeconds,
         issuer: config.auth?.jwtIssuer,
         audience: config.auth?.jwtAudience,
         publicKeyPem: config.auth?.jwtPublicKey,

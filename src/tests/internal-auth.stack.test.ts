@@ -155,7 +155,7 @@ describe("SEC-INT-1 internal auth (stack)", () => {
 
     const app = await createTestApp();
     const authToken = signHs256ForTest(
-      { sub: "user-1", exp: 2_000_000_000 },
+      { sub: "user-1", exp: Math.floor(Date.now() / 1000) + 300 },
       jwtSecret
     );
 

@@ -1,3 +1,5 @@
+import { parseJwtLifetimeLimit } from "../security/jwtPolicy";
+
 export const config = {
   port: Number(process.env.PORT) || 4100,
   databaseUrl: process.env.DATABASE_URL,
@@ -10,6 +12,7 @@ export const config = {
     | "jwt",
   auth: {
     jwtSecret: process.env.JWT_SECRET,
+    jwtMaxTokenLifetimeSeconds: parseJwtLifetimeLimit(process.env.JWT_MAX_TOKEN_LIFETIME_SECONDS),
     jwtIssuer: process.env.JWT_ISSUER,
     jwtAudience: process.env.JWT_AUDIENCE,
     jwtPublicKey: process.env.JWT_PUBLIC_KEY,
