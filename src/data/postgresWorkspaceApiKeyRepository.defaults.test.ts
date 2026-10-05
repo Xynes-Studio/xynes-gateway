@@ -53,8 +53,12 @@ const endsByUrl = new Map<string, number>();
 
 let nextRowsByUrl: Map<string, unknown[]> = new Map();
 let throwOnSelectFor: Set<string> = new Set();
+let throwOnEndFor: Set<string> = new Set();
 
-const fakePostgres: PostgresFactory = (databaseUrl) => {
+const fakePostgres: PostgresFactory = (databaseUrl, options) => {
+  if (typeof options === "object" && options !== null && "onnotice" in options && typeof options.onnotice === "function") {
+    options.onnotice(); // Simulate the driver's optional server-notice callback.
+  }
   const queries: CapturedQuery[] = [];
   queriesByUrl.set(databaseUrl, queries);
   endsByUrl.set(databaseUrl, 0);
@@ -70,6 +74,7 @@ const fakePostgres: PostgresFactory = (databaseUrl) => {
 
   sql.end = async () => {
     endsByUrl.set(databaseUrl, (endsByUrl.get(databaseUrl) ?? 0) + 1);
+    if (throwOnEndFor.has(databaseUrl)) throw new Error("simulated cleanup failure");
     return undefined;
   };
 
@@ -81,6 +86,8 @@ mock.module("postgres", () => ({ default: fakePostgres }));
 const { PostgresWorkspaceApiKeyRepository } =
   await import("./postgresWorkspaceApiKeyRepository");
 
+const { PostgresRouteRepository } = await import("./postgresRouteRepository");
+
 const STORED_HASH = "$argon2id$v=19$m=19456,t=2,p=1$saltsalt$hash";
 
 describe("PostgresWorkspaceApiKeyRepository — default builders (postgres mock)", () => {
@@ -91,6 +98,7 @@ describe("PostgresWorkspaceApiKeyRepository — default builders (postgres mock)
     endsByUrl.clear();
     nextRowsByUrl = new Map();
     throwOnSelectFor = new Set();
+    throwOnEndFor = new Set();
   });
 
   afterEach(() => {
@@ -99,6 +107,34 @@ describe("PostgresWorkspaceApiKeyRepository — default builders (postgres mock)
     } else {
       process.env.DATABASE_URL = originalDatabaseUrl;
     }
+  });
+
+  describe("route registry default loader", () => {
+    it("selects only enabled routes and closes its connection", async () => {
+      const url = "postgres://unused/enabled-routes";
+      nextRowsByUrl.set(url, [{id: "00000000-0000-4000-8000-000000000001", method: "GET",
+        path_pattern: "/workspaces/:workspaceId/delivery/entries", service_key: "cms-core",
+        action_key: "cms.delivery.listByDirectory", workspace_scoped: true, is_public: false}]);
+      const routes = await new PostgresRouteRepository({databaseUrl: url}).getRoutes();
+      expect(routes).toHaveLength(1);
+      expect(queriesByUrl.get(url)?.[0]?.text).toMatch(/WHERE\s+enabled\s*=\s*true/);
+      expect(endsByUrl.get(url)).toBe(1);
+    });
+    it("retains valid routes when connection cleanup fails", async () => {
+      const url = "postgres://unused/routes-cleanup-failure";
+      nextRowsByUrl.set(url, [{id: "00000000-0000-4000-8000-000000000001", method: "GET",
+        path_pattern: "/workspaces/:workspaceId/delivery/entries", service_key: "cms-core",
+        action_key: "cms.delivery.listByDirectory", workspace_scoped: true, is_public: false}]);
+      throwOnEndFor.add(url);
+      expect(await new PostgresRouteRepository({databaseUrl: url}).getRoutes()).toHaveLength(1);
+      expect(endsByUrl.get(url)).toBe(1);
+    });
+    it("reports registry fetch failures safely and still closes its connection", async () => {
+      const url = "postgres://unused/routes-failure";
+      throwOnSelectFor.add(url);
+      await expect(new PostgresRouteRepository({databaseUrl: url}).getRoutes()).rejects.toThrow("failed to load routes");
+      expect(endsByUrl.get(url)).toBe(1);
+    });
   });
 
   describe("default fetchRowByPrefix", () => {
