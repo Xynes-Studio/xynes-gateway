@@ -839,12 +839,35 @@ export class DynamicRouter {
     const cmsDelivery =
       ["cms-core", "cms_core", "cmscore"].includes(serviceKeyNormalized) &&
       ["cms.delivery.listByDirectory", "cms.delivery.getById"].includes(actionKey);
+    if (cmsDelivery) {
+      // Read the original URL: Hono's query object has already collapsed repeats.
+      // Reject identity overrides and discarded unsafe keys instead of widening a read.
+      const seen = new Set<string>();
+      let invalidQuery = false;
+      for (const [key] of new URL(request.url).searchParams) {
+        if (seen.has(key) || key in params || DynamicRouter.UNSAFE_PAYLOAD_KEYS.has(key)) {
+          invalidQuery = true;
+        }
+        seen.add(key);
+      }
+      for (const [key, value] of Object.entries(query)) {
+        if (key in params || DynamicRouter.UNSAFE_PAYLOAD_KEYS.has(key) ||
+          ((key === "limit" || key === "offset") && !/^[0-9]+$/.test(value))) {
+          invalidQuery = true;
+        }
+      }
+      if (invalidQuery) {
+        return Response.json(createErrorResponse(
+          "VALIDATION_ERROR", "Invalid CMS delivery query", reqId,
+        ), { status: 400 });
+      }
+    }
     const safeQuery: Record<string, unknown> = Object.create(null);
     for (const [key, value] of Object.entries(query)) {
       if (DynamicRouter.UNSAFE_PAYLOAD_KEYS.has(key)) continue;
       if (key === "workspaceId") continue;
       safeQuery[key] =
-        cmsDelivery && key === "search"
+        cmsDelivery && key !== "limit" && key !== "offset"
           ? value
           : DynamicRouter.coerceQueryValue(value);
     }

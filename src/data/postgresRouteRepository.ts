@@ -70,6 +70,7 @@ export class PostgresRouteRepository implements RouteRepository {
           workspace_scoped,
           is_public
         FROM platform.routes
+        WHERE enabled = true
       `;
 
       return rows;

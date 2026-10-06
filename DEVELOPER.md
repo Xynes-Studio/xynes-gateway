@@ -1809,3 +1809,25 @@ are rejected, including authz read checks. Follow the backend infra identity
 runbook for coordinated seven-service rollout and rotation. Protocol mirrors are
 generated from platform-contracts and must be changed/exported there; validate
 `corepack pnpm internal-request:check` with the backend workspace present.
+
+## CMS-INT-A4 delivery access and registry rollback
+
+The two `cms.delivery.*` actions reuse normal workspace API-key scope checks and
+user RBAC. Delivery query parsing rejects repeated names, path identity/query
+collisions, workspace override parameters and unsafe payload keys before an
+upstream call. Pagination uses decimal digits; CMS enforces integer bounds,
+allowed fields/CSV and filters. Other delivery values retain their string form,
+including numeric-looking searches. Legacy route coercion is unchanged.
+
+The database route loader now selects `enabled = true`. Previously it loaded
+rows regardless of that flag, defeating disable-and-restart rollback. Route
+loading occurs at startup: after an approved registry change, restart the
+gateway; rate/body-limit cache refreshes do not reload routes. Disabling the two
+delivery rows and restarting hides them without deleting snapshots or key
+scopes. A zero-enabled-row registry still fails startup closed.
+
+Regressions: `dynamicRouter.delivery-access.test.ts` exercises Hono requests,
+authorization and no upstream fallback; the shared default Postgres SQL fixture
+asserts enabled filtering. CMS's disposable `content-delivery-access.test.ts`
+proves real issued keys, HTTP dispatch, SQL migration idempotence and rollback.
+Operational details are in infra `docs/deployment/cms-delivery-access.md`.
