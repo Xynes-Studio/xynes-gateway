@@ -36,10 +36,18 @@ const { createApp } = await import("../app");
 const { InMemoryRouteRepository } = await import("../data/routeRepository");
 const { TEST_ROUTES } = await import("../testUtils/routesFixture");
 
-const createTestApp = () =>
-  createApp({
+const { createGatewayLoggingMiddleware } = await import("../logging/middleware");
+const { GatewayLogDispatcher } = await import("../logging/dispatcher");
+const createTestApp = async () => {
+  const app = await createApp({
     routeRepository: new InMemoryRouteRepository(TEST_ROUTES),
   });
+  // Own the dispatcher: unrelated suites may have imported the disabled
+  // process singleton before this fixture enabled audit logging.
+  return new Hono()
+    .use("*", createGatewayLoggingMiddleware(new GatewayLogDispatcher({ enabled: true })))
+    .route("/", app);
+};
 
 describe("SEC-INT-1 internal auth (stack)", () => {
   const originalFetch = global.fetch;

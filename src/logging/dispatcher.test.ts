@@ -1,13 +1,20 @@
-import { config } from "../infra/config";
-import { afterEach, beforeEach, expect, test } from 'bun:test';
-import { gatewayIdentity } from '../tests/support/internal-request';
-import { GatewayLogDispatcher } from './dispatcher';
+import { afterEach, beforeEach, expect, test, mock } from 'bun:test';
+import { gatewayIdentity, installGatewayIdentity } from '../tests/support/internal-request';
 import { verifyInternalRequest } from '../security/internalRequest';
 import type { GatewayAccessLogV1 } from './types';
 
+mock.module("../infra/config", () => ({ config: {
+  internalServiceToken: "test-internal-token",
+  auth: { jwtSecret: "test-jwt-secret" },
+  services: { docs: "http://doc.local", cms: "http://cms.local", accounts: "http://accounts.local", authz: "http://authz.local", telemetry: "http://telemetry-fixture", storage: "http://storage.local" },
+  posthog: { apiKey: "", host: "https://app.posthog.com" },
+} }));
+const { config } = await import("../infra/config");
+const { GatewayLogDispatcher } = await import("./dispatcher");
+
 const originalFetch = global.fetch;
 const originalTelemetryUrl = config.services.telemetry;
-beforeEach(() => { config.services.telemetry = "http://telemetry-fixture"; });
+beforeEach(() => { installGatewayIdentity(); config.services.telemetry = "http://telemetry-fixture"; });
 const originalError = console.error;
 const originalWarn = console.warn;
 afterEach(() => { config.services.telemetry = originalTelemetryUrl; global.fetch = originalFetch; console.error = originalError; console.warn = originalWarn; });
