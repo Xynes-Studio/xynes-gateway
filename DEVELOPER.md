@@ -1163,7 +1163,7 @@ The Dynamic Router implements a "Smart Proxy" pattern:
 
 Internal requests require Ed25519 signatures bound to receiver, operation, exact body and actor/workspace/request headers. Shared tokens, HS256 service tokens and hybrid fallback are rejected.
 
-Receivers require `INTERNAL_REQUEST_TRUST_FILE` containing only permitted callers' public keys. Callers require their own `INTERNAL_REQUEST_PRIVATE_KEY_FILE` and `INTERNAL_REQUEST_KEY_ID`. Never distribute a caller private key in a shared env file or mount it in a sibling. Deploy all seven compatible services together and follow [the identity runbook](../xynes-infra/infra/release/INTERNAL-REQUEST-IDENTITIES.md) for provisioning and rotation. Protocol source and checked mirrors belong to platform-contracts.
+Receivers require `INTERNAL_REQUEST_TRUST_FILE` containing only permitted callers' public keys. Callers require their own `INTERNAL_REQUEST_PRIVATE_KEY_FILE` and `INTERNAL_REQUEST_KEY_ID`. Never distribute a caller private key in a shared env file or mount it in a sibling. Deploy all seven compatible services together and follow the identity runbook at `xynes/xynes-infra/infra/release/INTERNAL-REQUEST-IDENTITIES.md` (workspace-root relative) for provisioning and rotation. Protocol source and checked mirrors belong to platform-contracts.
 
 ### Public Routes (GATE-6)
 
