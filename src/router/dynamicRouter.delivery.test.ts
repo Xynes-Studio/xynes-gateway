@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, it, mock, spyOn } from "bun:test";
+import { installGatewayIdentity } from "../tests/support/internal-request";
+import { beforeEach, afterEach, describe, expect, it, mock, spyOn } from "bun:test";
 import { z } from "zod";
 import type { Route } from "../types";
 
@@ -14,6 +15,7 @@ function forwardedRequest(input: Parameters<typeof fetch>[0], init: Parameters<t
   return input instanceof Request ? new Request(input, init) : new Request(input.toString(), init);
 }
 const payloadSchema = z.object({payload: z.record(z.string(), z.unknown())});
+beforeEach(installGatewayIdentity);
 afterEach(() => mock.restore());
 function route(actionKey: string): Route { return {id: "delivery-fixture", method: "GET", pathPattern: "/workspaces/:workspaceId/delivery/entries", serviceKey: "cms-core", targetPath: "/internal/cms-actions", workspaceScoped: true, actionKey, isPublic: false}; }
 async function proxy(actionKey: string, query: Record<string, string> = {}) {return router.proxyRequest({route: route(actionKey), params: {workspaceId}}, new Request("http://gateway.fixture.invalid"), query, "fixture-request-id");}

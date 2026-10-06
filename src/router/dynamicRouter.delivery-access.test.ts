@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, it, mock, spyOn } from "bun:test";
+import { installGatewayIdentity } from "../tests/support/internal-request";
+import { beforeEach, afterEach, describe, expect, it, mock, spyOn } from "bun:test";
 import { randomBytes } from "node:crypto";
 import { Hono } from "hono";
 import { z } from "zod";
@@ -29,6 +30,7 @@ function fixture(scopes = actions, workspace = workspaceId, valid = true) {
   const fetchSpy = spyOn(globalThis, "fetch").mockClear().mockImplementation(Object.assign(async () => Response.json(envelope), {preconnect: () => {}}));
   return {authz, fetchSpy, request: (path: string) => app.request(path, {headers: {"X-XS-API-Key": key}})};
 }
+beforeEach(installGatewayIdentity);
 afterEach(() => mock.restore());
 describe("registered delivery HTTP access", () => {
   it("dispatches both scoped reads through API-key auth without user RBAC", async () => {

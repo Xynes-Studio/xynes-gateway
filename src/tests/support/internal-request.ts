@@ -15,8 +15,11 @@ writeFileSync(trustFile, JSON.stringify([
   { issuer: 'gateway', keyId: 'g1', publicKey: gatewayIdentity.publicKey.export({ type: 'spki', format: 'pem' }) },
   { issuer: 'accounts', keyId: 'a1', publicKey: accountsIdentity.publicKey.export({ type: 'spki', format: 'pem' }) },
 ]), { mode: 0o600 });
-process.env.INTERNAL_REQUEST_PRIVATE_KEY_FILE = privateFile;
-process.env.INTERNAL_REQUEST_KEY_ID = 'g1';
-process.env.INTERNAL_REQUEST_TRUST_FILE = trustFile;
+export function installGatewayIdentity(): void {
+  process.env.INTERNAL_REQUEST_PRIVATE_KEY_FILE = privateFile;
+  process.env.INTERNAL_REQUEST_KEY_ID = 'g1';
+  process.env.INTERNAL_REQUEST_TRUST_FILE = trustFile;
+}
+installGatewayIdentity();
 
 EventEmitter.prototype.once.call(process, 'exit', () => rmSync(dir, { recursive: true, force: true }));

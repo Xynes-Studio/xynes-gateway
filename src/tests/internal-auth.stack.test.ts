@@ -1,6 +1,6 @@
-import { gatewayIdentity } from "./support/internal-request";
+import { gatewayIdentity, installGatewayIdentity } from "./support/internal-request";
 import { verifyInternalRequest, internalRequestAudience, internalRequestOperation } from "../security/internalRequest";
-import { describe, it, expect, beforeAll, afterAll, vi, mock } from "bun:test";
+import { describe, it, expect, beforeAll, beforeEach, afterAll, vi, mock } from "bun:test";
 import { Hono } from "hono";
 import type { Context } from "hono";
 import { signHs256ForTest } from "../testUtils/jwtTestUtils";
@@ -71,6 +71,11 @@ describe("SEC-INT-1 internal auth (stack)", () => {
     }
     return null;
   };
+
+  beforeEach(() => {
+    installGatewayIdentity();
+    process.env.GATEWAY_AUDIT_ENABLED = "true";
+  });
 
   beforeAll(() => {
     authzApp = new Hono();
