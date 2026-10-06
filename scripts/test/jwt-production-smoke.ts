@@ -36,4 +36,10 @@ const rsToken = `${input}.${sign('RSA-SHA256', Buffer.from(input), privateKey).t
 const config = { publicKeyPem: publicKey.export({ type: 'spki', format: 'pem' }).toString(), issuer, audience: 'authenticated', maxTokenLifetimeSeconds: 60 };
 assert.equal((await verifyJwt(rsToken, config))?.sub, claims.sub);
 assert.equal(await verifyJwt(rsToken, { ...config, audience: 'anon' }), null);
-console.log('SEC-006 production smoke passed: actual middleware rejects malformed/context-mismatched/overlong HS256; RS256 and mandatory startup guard pass.');
+const ec = generateKeyPairSync('ec', { namedCurve: 'prime256v1' });
+const ecToken = `${input}.${sign('sha256', Buffer.from(input), ec.privateKey).toString('base64url')}`;
+assert.equal(await verifyJwt(ecToken, {
+  ...config,
+  publicKeyPem: ec.publicKey.export({ type: 'spki', format: 'pem' }).toString(),
+}), null);
+console.log('SEC-006 production smoke passed: actual middleware rejects malformed/context-mismatched/overlong HS256; RS256, static EC-key rejection and mandatory startup guard pass.');
