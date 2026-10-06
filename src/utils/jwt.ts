@@ -300,7 +300,7 @@ export async function verifyJwt(
       publicKey = resolveJwtPublicKeyFromJwks(jwks, typeof header.kid === "string" ? header.kid : undefined);
     }
 
-    if (!publicKey) return null;
+    if (!publicKey || publicKey.asymmetricKeyType !== "rsa") return null;
     try {
       const ok = verify("RSA-SHA256", Buffer.from(signingInput), publicKey, sig);
       return ok ? payload : null;

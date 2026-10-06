@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test';
-import { createHmac } from 'node:crypto';
+import { createHmac, generateKeyPairSync, sign } from 'node:crypto';
 import { verifyJwt } from './jwt';
 import { assertJwtStartupConfig } from '../security/jwtStartupWarnings';
 import { createRsaKeyPairForTest, signRs256ForTest } from '../testUtils/jwtTestUtils';
@@ -118,5 +118,16 @@ describe('SEC-006 canonical user JWT policy', () => {
       expect(await verifyFromKeys(payload, { kid: 'old' })).toBeNull();
     }
     for (const kid of [1, '', ' ']) expect(await verifyFromKeys({ keys: jwks }, { kid })).toBeNull();
+  });
+  it('rejects EC signatures labelled RS256 in the static PEM path', async () => {
+    const ec = generateKeyPairSync('ec', { namedCurve: 'prime256v1' });
+    const encode = (value: unknown) => Buffer.from(JSON.stringify(value)).toString('base64url');
+    const input = `${encode({ alg: 'RS256', typ: 'JWT' })}.${encode(canonical)}`;
+    const token = `${input}.${sign('sha256', Buffer.from(input), ec.privateKey).toString('base64url')}`;
+    expect(await verifyJwt(token, {
+      publicKeyPem: ec.publicKey.export({ type: 'spki', format: 'pem' }).toString(),
+      issuer,
+      audience: 'authenticated',
+    }, { nowEpochSeconds: now })).toBeNull();
   });
 });
