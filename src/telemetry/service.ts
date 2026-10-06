@@ -13,7 +13,7 @@
  */
 
 import { config } from "../infra/config";
-import { signInternalJwt } from "../security/internalJwt";
+import { signInternalRequest } from "../security/internalRequest";
 import { generateRequestId } from "../utils/requestId";
 import {
   buildHttpRequestTelemetryEvent,
@@ -57,22 +57,6 @@ export class GatewayTelemetryService implements IGatewayTelemetryService {
     this.telemetryUrl = `${
       telemetryServiceUrl ?? config.services.telemetry
     }/internal/telemetry-actions`;
-  }
-
-  /**
-   * Generate the internal service token (JWT or legacy static token).
-   * SEC-INTERNAL-AUTH-2: Prefers JWT when signing key is available.
-   */
-  private generateInternalToken(requestId: string): string | null {
-    if (config.internalJwtSigningKey) {
-      return signInternalJwt(config.internalJwtSigningKey, {
-        // Audience must match what telemetry-service expects, otherwise it will
-        // reject with `audience_mismatch`.
-        serviceKey: "telemetry-service",
-        requestId,
-      });
-    }
-    return config.internalServiceToken ?? null;
   }
 
   /**
@@ -123,11 +107,6 @@ export class GatewayTelemetryService implements IGatewayTelemetryService {
         headers.set("Content-Type", "application/json");
         headers.set("X-Request-Id", requestId);
 
-        // SEC-INTERNAL-AUTH-2: Use JWT-based auth
-        const token = this.generateInternalToken(requestId);
-        if (token) {
-          headers.set("X-Internal-Service-Token", token);
-        }
 
         if (userId) {
           headers.set("X-XS-User-Id", userId);
@@ -136,21 +115,22 @@ export class GatewayTelemetryService implements IGatewayTelemetryService {
           headers.set("X-Workspace-Id", workspaceId);
         }
 
+        const body = JSON.stringify(actionPayload);
+        headers.set("X-Internal-Service-Token", signInternalRequest({
+          audience: "telemetry-service", operation: actionPayload.actionKey,
+          url: this.telemetryUrl, method: "POST", headers, body,
+        }));
         const response = await fetch(this.telemetryUrl, {
-          method: "POST",
-          headers,
-          body: JSON.stringify(actionPayload),
+          method: "POST", headers, body, signal: AbortSignal.timeout(5000),
         });
 
         if (!response.ok) {
-          const text = await response.text();
           console.error(
-            `[GatewayTelemetryService] Ingest failed: ${response.status} ${text}`
+            `[GatewayTelemetryService] Ingest failed: ${response.status}`
           );
         }
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        console.error(`[GatewayTelemetryService] Error: ${message}`);
+      } catch {
+        console.error("[GatewayTelemetryService] Internal telemetry delivery failed");
       }
     })();
   }

@@ -1,4 +1,5 @@
-import "../tests/support/internal-request";
+import { gatewayIdentity } from "../tests/support/internal-request";
+import { verifyInternalRequest } from "../security/internalRequest";
 import { describe, it, expect, beforeEach, afterEach, vi, mock } from "bun:test";
 import type { Route, RouteMatch } from "../types";
 import type { IAuthzService } from "../services/authzService";
@@ -186,7 +187,7 @@ describe("DynamicRouter", () => {
       (mockAuthzService.check as unknown as MockFn).mockResolvedValue(true);
 
       const token = signHs256ForTest(
-        { sub: "user-1", exp: 2_000_000_000 },
+        { sub: "user-1", exp: Math.floor(Date.now() / 1000) + 300 },
         "test-jwt-secret",
       );
       const req = new Request("http://localhost/workspaces/123/documents", {
@@ -215,7 +216,7 @@ describe("DynamicRouter", () => {
       (mockAuthzService.check as unknown as MockFn).mockResolvedValue(false);
 
       const token = signHs256ForTest(
-        { sub: "user-2", exp: 2_000_000_000 },
+        { sub: "user-2", exp: Math.floor(Date.now() / 1000) + 300 },
         "test-jwt-secret",
       );
       const req = new Request("http://localhost/workspaces/123/documents/456", {
@@ -288,7 +289,7 @@ describe("DynamicRouter", () => {
 
       (mockAuthzService.check as unknown as MockFn).mockResolvedValue(true);
       const token = signHs256ForTest(
-        { sub: "admin-user", exp: 2_000_000_000 },
+        { sub: "admin-user", exp: Math.floor(Date.now() / 1000) + 300 },
         "test-jwt-secret",
       );
       const req = new Request("http://localhost/admin/settings", {
@@ -320,7 +321,7 @@ describe("DynamicRouter", () => {
       const match = { route: meRoute, params: {} };
 
       const token = signHs256ForTest(
-        { sub: "user-1", exp: 2_000_000_000 },
+        { sub: "user-1", exp: Math.floor(Date.now() / 1000) + 300 },
         "test-jwt-secret",
       );
       const req = new Request("http://localhost/me", {
@@ -347,7 +348,7 @@ describe("DynamicRouter", () => {
       const match = { route: profileRoute, params: {} };
 
       const token = signHs256ForTest(
-        { sub: "user-1", exp: 2_000_000_000 },
+        { sub: "user-1", exp: Math.floor(Date.now() / 1000) + 300 },
         "test-jwt-secret",
       );
       const req = new Request("http://localhost/me/profile", {
@@ -412,9 +413,10 @@ describe("DynamicRouter", () => {
       const headers = callArgs[1].headers as Headers;
       expect(headers.get("X-XS-User-Id")).toBe("user-1");
       expect(headers.get("X-Workspace-Id")).toBe("123");
-      expect(headers.get("X-Internal-Service-Token")).toBe(
-        "test-internal-token",
-      );
+      expect(verifyInternalRequest(headers.get('X-Internal-Service-Token') ?? '', {
+        audience: 'doc-service', operation: 'docs.document.create',
+        url: String(callArgs[0]), method: 'POST', body: String(callArgs[1].body), headers,
+      }, [{ issuer: 'gateway', keyId: 'g1', publicKey: gatewayIdentity.publicKey }])).toBe(true);
       expect(headers.get("User-Agent")).toBe("test-agent");
 
       expect(response.status).toBe(201);
@@ -993,7 +995,7 @@ describe("DynamicRouter", () => {
 
       (mockAuthzService.check as unknown as MockFn).mockResolvedValue(true);
       const token = signHs256ForTest(
-        { sub: "user-jwt", exp: 2_000_000_000 },
+        { sub: "user-jwt", exp: Math.floor(Date.now() / 1000) + 300 },
         "test-jwt-secret",
       );
       const req = new Request(
@@ -1033,7 +1035,7 @@ describe("DynamicRouter", () => {
 
       (mockAuthzService.check as unknown as MockFn).mockResolvedValue(true);
       const token = signHs256ForTest(
-        { sub: "user-jwt", exp: 2_000_000_000 },
+        { sub: "user-jwt", exp: Math.floor(Date.now() / 1000) + 300 },
         "test-jwt-secret",
       );
       const req = new Request(
@@ -1069,7 +1071,7 @@ describe("DynamicRouter", () => {
 
       (mockAuthzService.check as unknown as MockFn).mockResolvedValue(true);
       const token = signHs256ForTest(
-        { sub: "user-jwt-2", exp: 2_000_000_000 },
+        { sub: "user-jwt-2", exp: Math.floor(Date.now() / 1000) + 300 },
         "test-jwt-secret",
       );
       // Marker present but the secret portion is too short and contains a
@@ -1182,7 +1184,7 @@ describe("DynamicRouter", () => {
       (mockAuthzService.check as unknown as MockFn).mockResolvedValue(true);
 
       const token = signHs256ForTest(
-        { sub: "user-actor", exp: 2_000_000_000 },
+        { sub: "user-actor", exp: Math.floor(Date.now() / 1000) + 300 },
         "test-jwt-secret",
       );
       const req = new Request(

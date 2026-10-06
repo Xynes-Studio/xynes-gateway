@@ -1,6 +1,6 @@
-import { gatewayIdentity } from "./support/internal-request";
-import { verifyInternalRequest } from "../security/internalRequest";
-import { describe, it, expect, beforeAll, afterAll, vi, mock } from "bun:test";
+import { gatewayIdentity, installGatewayIdentity } from "./support/internal-request";
+import { verifyInternalRequest, internalRequestAudience, internalRequestOperation } from "../security/internalRequest";
+import { describe, it, expect, beforeAll, beforeEach, afterAll, vi, mock } from "bun:test";
 import { Hono } from "hono";
 import type { Context } from "hono";
 import { signHs256ForTest } from "../testUtils/jwtTestUtils";
@@ -36,10 +36,18 @@ const { createApp } = await import("../app");
 const { InMemoryRouteRepository } = await import("../data/routeRepository");
 const { TEST_ROUTES } = await import("../testUtils/routesFixture");
 
-const createTestApp = () =>
-  createApp({
+const { createGatewayLoggingMiddleware } = await import("../logging/middleware");
+const { GatewayLogDispatcher } = await import("../logging/dispatcher");
+const createTestApp = async () => {
+  const app = await createApp({
     routeRepository: new InMemoryRouteRepository(TEST_ROUTES),
   });
+  // Own the dispatcher: unrelated suites may have imported the disabled
+  // process singleton before this fixture enabled audit logging.
+  return new Hono()
+    .use("*", createGatewayLoggingMiddleware(new GatewayLogDispatcher({ enabled: true })))
+    .route("/", app);
+};
 
 describe("SEC-INT-1 internal auth (stack)", () => {
   const originalFetch = global.fetch;
@@ -50,7 +58,7 @@ describe("SEC-INT-1 internal auth (stack)", () => {
   let telemetryApp: Hono;
   let telemetryCalls = 0;
 
-  const requireToken = (c: Context): Response | null => {
+  const requireToken = async (c: Context): Promise<Response | null> => {
     const provided = c.req.header("X-Internal-Service-Token");
     if (!provided) {
       return c.json(
@@ -58,7 +66,12 @@ describe("SEC-INT-1 internal auth (stack)", () => {
         401
       );
     }
-    if (provided !== token) {
+    const audience = internalRequestAudience(c.req.path.includes('doc-actions') ? 'docs' : c.req.path.includes('cms-actions') ? 'cms' : 'telemetry');
+    const body = await c.req.raw.clone().text();
+    if (!audience || !verifyInternalRequest(provided, {
+      audience, operation: internalRequestOperation(audience, c.req.path, body),
+      url: c.req.url, method: c.req.method, headers: c.req.raw.headers, body,
+    }, [{ issuer: 'gateway', keyId: 'g1', publicKey: gatewayIdentity.publicKey }])) {
       return c.json(
         { ok: false, error: { code: "FORBIDDEN", message: "invalid" } },
         403
@@ -66,6 +79,11 @@ describe("SEC-INT-1 internal auth (stack)", () => {
     }
     return null;
   };
+
+  beforeEach(() => {
+    installGatewayIdentity();
+    process.env.GATEWAY_AUDIT_ENABLED = "true";
+  });
 
   beforeAll(() => {
     authzApp = new Hono();
@@ -78,7 +96,7 @@ describe("SEC-INT-1 internal auth (stack)", () => {
 
     docApp = new Hono();
     docApp.post("/internal/doc-actions", async (c) => {
-      const denied = requireToken(c);
+      const denied = await requireToken(c);
       if (denied) return denied;
       const raw = await c.req.json().catch(() => ({}));
       const echoedActionKey =
@@ -98,7 +116,7 @@ describe("SEC-INT-1 internal auth (stack)", () => {
 
     cmsApp = new Hono();
     cmsApp.post("/internal/cms-actions", async (c) => {
-      const denied = requireToken(c);
+      const denied = await requireToken(c);
       if (denied) return denied;
       const raw = await c.req.json().catch(() => ({}));
       const echoedActionKey =
@@ -110,7 +128,7 @@ describe("SEC-INT-1 internal auth (stack)", () => {
 
     telemetryApp = new Hono();
     telemetryApp.post("/internal/telemetry-actions", async (c) => {
-      const denied = requireToken(c);
+      const denied = await requireToken(c);
       if (denied) return denied;
       telemetryCalls += 1;
       return c.json({ ok: true }, 201);
@@ -127,7 +145,7 @@ describe("SEC-INT-1 internal auth (stack)", () => {
     vi.restoreAllMocks();
   });
 
-  it("gateway succeeds only when internal token is injected", async () => {
+  it("gateway dispatches only with bound receiver identities", async () => {
     telemetryCalls = 0;
 
     global.fetch = vi.fn(
@@ -150,7 +168,7 @@ describe("SEC-INT-1 internal auth (stack)", () => {
 
     const app = await createTestApp();
     const authToken = signHs256ForTest(
-      { sub: "user-1", exp: 2_000_000_000 },
+      { sub: "user-1", exp: Math.floor(Date.now() / 1000) + 300 },
       jwtSecret
     );
 

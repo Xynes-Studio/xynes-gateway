@@ -1,7 +1,18 @@
-import { describe, expect, it } from "bun:test";
-import { assertJwtStartupConfig, getJwtStartupWarnings } from "./jwtStartupWarnings";
+import { describe, expect, it, spyOn } from "bun:test";
+import { assertJwtStartupConfig, getJwtStartupWarnings, logJwtStartupWarnings } from "./jwtStartupWarnings";
 
 describe("jwtStartupWarnings", () => {
+  it("logs missing production configuration without exposing credentials", () => {
+    const warning = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      logJwtStartupWarnings({ jwtIssuer: " ", jwtAudience: "" }, { nodeEnv: "production" });
+      expect(warning).toHaveBeenCalledTimes(1);
+      expect(warning.mock.calls[0]?.[0]).toContain("JWT_ISSUER and JWT_AUDIENCE");
+      expect(warning.mock.calls[0]?.[0]).toContain("NODE_ENV=production");
+    } finally {
+      warning.mockRestore();
+    }
+  });
   it("should warn when issuer/audience are not configured", () => {
     const warnings = getJwtStartupWarnings(
       { jwtIssuer: undefined, jwtAudience: undefined },

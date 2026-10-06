@@ -54,8 +54,8 @@ These conventions are enforced to keep the gateway consistent with broader platf
   - Internal calls must derive `X-XS-User-Id` from `req.auth.userId` only; client-sent `X-XS-*` headers are never trusted.
 
 - **Security-by-default**
-  - JWT validation enforces signature + `exp`/`nbf`.
-  - `iss`/`aud` are enforced when configured; prefer enabling `JWT_REQUIRE_ISS_AUD_IN_PROD=1` in production.
+  - JWT validation requires a signature, nonblank string `sub`, finite integer `iat`/`exp`, a bounded lifetime and valid optional `nbf`.
+  - `iss`/`aud` are enforced when configured and are mandatory in production; the legacy opt-out flag has no effect.
   - JWKS fetching is fail-closed with strict URL policy and no redirects.
 
 - **TDD + Coverage**
@@ -1101,11 +1101,14 @@ Gateway JWT validation is designed to be **fail-closed** when security-relevant 
 
 - **Issuer / Audience**
   - If `JWT_ISSUER` and `JWT_AUDIENCE` are set, gateway enforces `iss` and `aud` checks for both HS256 and RS256.
-  - If either is missing, gateway logs a startup warning and runs in dev-only mode without `iss`/`aud` enforcement.
-  - Optional production guard: set `JWT_REQUIRE_ISS_AUD_IN_PROD=1` to refuse startup in `NODE_ENV=production` unless both are configured.
+  - Production refuses startup and token verification without both values, including when the legacy `JWT_REQUIRE_ISS_AUD_IN_PROD` flag is disabled. Nonproduction warns about missing values and enforces each configured value.
+  - `JWT_MAX_TOKEN_LIFETIME_SECONDS` defaults to 3600; explicit decimal integers from 60 through 86400 are supported. Invalid configuration refuses startup. Match the provider issuance lifetime before rollout.
+  - All access tokens require nonblank string `sub`, nonnegative safe-integer `iat`/`exp`, `iat <= now < exp`, and `0 < exp - iat <= configured maximum`. Optional `nbf` must be an integer within `[iat, exp)` and no later than now; there is no clock-skew grace. Optional issuer/audience values must have valid string shapes; audience arrays must contain nonblank strings.
+  - Set issuer to the exact provider claim (local Supabase normally `http://127.0.0.1:54321/auth/v1`) and audience to `authenticated`. Supabase anon/service-role credentials are not user access tokens.
+  - See `docs/security/2026-10-05-jwt-validation.md` for evidence and infra `infra/release/JWT-VALIDATION-ROLLOUT.md` for migration and explicit key rotation.
 
 - **RS256 JWKS**
-  - If `JWT_JWKS_URL` is set, gateway fetches JWKS with a strict timeout and caches keys in-memory with a TTL (defaults: 3s timeout, 5m TTL).
+  - If `JWT_JWKS_URL` is set, gateway fetches JWKS with a strict timeout and caches keys in-memory with a TTL (defaults: 3s timeout, 5m TTL). JWKS entries must be typed objects, and key selection must be unique; multiple eligible keys require an unambiguous `kid`. Unknown, malformed or duplicated identifiers fail closed.
   - JWKS URL policy:
     - Only `https://` is allowed.
     - Redirects are rejected.
@@ -1156,94 +1159,11 @@ The Dynamic Router implements a "Smart Proxy" pattern:
 - Any client-sent `X-XS-*`, `X-Internal-*`, `X-Workspace-Id`, or `X-Internal-Service-Token` values are ignored/overwritten and never forwarded to internal services.
 - The gateway sends `X-XS-User-Id` only when the request is authenticated; for anonymous/public requests it is **omitted**.
 
-### Structured Internal JWT for Service-to-Service Auth (SEC-INTERNAL-AUTH-2)
+### Bound internal service requests
 
-> XYN-SEC-003 replaces shared credentials on protected accounts/authz paths; the table below is legacy compatibility for other services only.
+Internal requests require Ed25519 signatures bound to receiver, operation, exact body and actor/workspace/request headers. Shared tokens, HS256 service tokens and hybrid fallback are rejected.
 
-
-The gateway signs short-lived HS256 JWTs for service-to-service authentication, replacing the legacy static shared secret pattern.
-
-#### Architecture
-
-```
-┌──────────────┐     ┌─────────────────┐     ┌──────────────────┐
-│   Gateway    │────▶│  Sign JWT with  │────▶│  Backend Service │
-│   (caller)   │     │  INTERNAL_JWT_  │     │  (verifies JWT)  │
-│              │     │  SIGNING_KEY    │     │                  │
-└──────────────┘     └─────────────────┘     └──────────────────┘
-```
-
-#### JWT Structure
-
-**Header:**
-```json
-{ "alg": "HS256", "typ": "JWT" }
-```
-
-**Payload:**
-```json
-{
-  "aud": "doc-service",      // Target service (audience claim)
-  "iat": 1700000000,         // Issued-at (Unix epoch seconds)
-  "exp": 1700000060,         // Expiration (iat + 60s default TTL)
-  "internal": true,          // Marks this as an internal service JWT
-  "requestId": "req-abc123"  // Request correlation ID
-}
-```
-
-#### Configuration (Gateway)
-
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `INTERNAL_JWT_SIGNING_KEY` | Yes* | HS256 signing key (≥32 bytes recommended) |
-| `INTERNAL_SERVICE_TOKEN` | No | Legacy fallback token (deprecated) |
-
-*Required when `INTERNAL_AUTH_MODE=jwt` on backend services.
-
-#### Configuration (Backend Services)
-
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `INTERNAL_JWT_SIGNING_KEY` | Yes* | Same key as gateway for verification |
-| `INTERNAL_AUTH_MODE` | No | `jwt` (production) or `hybrid` (migration) |
-| `INTERNAL_SERVICE_TOKEN` | No | Legacy token for hybrid mode fallback |
-
-**Auth Modes:**
-- `jwt`: Only accepts signed JWTs (production target)
-- `hybrid`: Accepts JWT or falls back to legacy token (migration phase)
-
-#### Service Keys (Audience Values)
-
-| Service | Audience (`aud`) |
-|---------|------------------|
-| doc-service | `doc-service` |
-| cms-core | `cms-service` |
-| authz-service | `authz-service` |
-| telemetry-service | `telemetry-service` |
-| accounts-service | `accounts-service` |
-| storage-service | `storage-service` |
-
-#### Security Properties
-
-- **Short-lived**: 60-second TTL limits the replay window
-- **Audience-scoped**: JWT is only valid for the intended service
-- **Timing-safe**: Signature verification uses constant-time comparison
-- **Clock tolerance**: 5-second skew allowance for distributed clocks
-
-#### Migration Path
-
-1. **Phase 1 (Current)**: Deploy with `INTERNAL_AUTH_MODE=hybrid` on all services
-2. **Phase 2**: Verify JWT auth working in logs, then switch to `INTERNAL_AUTH_MODE=jwt`
-3. **Phase 3**: Remove `INTERNAL_SERVICE_TOKEN` from all services
-
-#### Implementation Files
-
-| Component | Location |
-|-----------|----------|
-| JWT signing (gateway) | `src/security/internalJwt.ts` |
-| Internal headers (gateway) | `src/security/internalHeaders.ts` |
-| JWT verification (services) | `src/infra/security/internal-jwt.ts` |
-| Auth middleware (services) | `src/middleware/internal-service-auth.ts` |
+Receivers require `INTERNAL_REQUEST_TRUST_FILE` containing only permitted callers' public keys. Callers require their own `INTERNAL_REQUEST_PRIVATE_KEY_FILE` and `INTERNAL_REQUEST_KEY_ID`. Never distribute a caller private key in a shared env file or mount it in a sibling. Deploy all seven compatible services together and follow the identity runbook at `xynes/xynes-infra/infra/release/INTERNAL-REQUEST-IDENTITIES.md` (workspace-root relative) for provisioning and rotation. Protocol source and checked mirrors belong to platform-contracts.
 
 ### Public Routes (GATE-6)
 
@@ -1352,11 +1272,12 @@ Ensure the following environment variables are set:
 - `ACCOUNTS_SERVICE_URL`: URL of the Accounts Service (default: `http://localhost:<port>`)
 - `AUTHZ_SERVICE_URL`: URL of the Authorization Service (default: `http://localhost:3002`)
 - `TELEMETRY_SERVICE_URL`: URL of the Telemetry Service (default: `http://localhost:3004`)
-- `INTERNAL_SERVICE_TOKEN`: Shared secret for internal service calls (sent as `X-Internal-Service-Token`)
+- `INTERNAL_REQUEST_PRIVATE_KEY_FILE` and `INTERNAL_REQUEST_KEY_ID`: gateway-owned signing identity for internal calls
 - `JWT_SECRET`: HS256 JWT secret used to validate `Authorization: Bearer <JWT>` and derive `X-XS-User-Id` for protected routes
-- `JWT_ISSUER`: Expected `iss` claim (when set, tokens must match). If missing, gateway logs a startup warning and does not enforce `iss`.
-- `JWT_AUDIENCE`: Expected `aud` claim (when set, tokens must match). If missing, gateway logs a startup warning and does not enforce `aud`.
-- `JWT_REQUIRE_ISS_AUD_IN_PROD`: Optional guard. When set to `1`/`true`, gateway refuses to start in `NODE_ENV=production` unless both `JWT_ISSUER` and `JWT_AUDIENCE` are set.
+- `JWT_ISSUER`: Exact expected `iss` claim. Required in production; configured values are enforced in every environment.
+- `JWT_AUDIENCE`: Expected `aud` claim, normally `authenticated`. Required in production; configured values are enforced in every environment.
+- `JWT_REQUIRE_ISS_AUD_IN_PROD`: Deprecated and ignored; production enforcement cannot be disabled.
+- `JWT_MAX_TOKEN_LIFETIME_SECONDS`: Maximum access-token `exp - iat` (default 3600, explicit integer range 60–86400).
 - `JWT_PUBLIC_KEY`: Optional PEM public key for RS256 validation (alternative to `JWT_JWKS_URL`)
 - `JWT_JWKS_URL`: Optional JWKS URL for RS256 validation. When set, the gateway fetches and caches JWKS in-memory with a TTL; only `https://` URLs are allowed and redirects are rejected. Hostnames must not be `localhost` or a private IP literal (note: DNS resolution is not performed, so ensure your hostname cannot resolve to private IPs).
 
@@ -1877,6 +1798,17 @@ Only `cms.delivery.listByDirectory` and `cms.delivery.getById` on the CMS servic
 A3 adds no route seeds, key resolver, scope grants or custom credential path. A4 owns workspace-scoped routes `/workspaces/:workspaceId/delivery/entries` and `/workspaces/:workspaceId/delivery/entries/:entryId`, permission wiring and preset scopes. Deploy this patch alongside the CMS implementation, after its approved migration 0009, when A4 wiring is ready. No live route registration or deployment was performed during A3.
 
 `src/router/dynamicRouter.delivery.test.ts` covers preserved search strings, numeric pagination, both action envelopes, unchanged legacy routes and malformed upstream/error responses. Fresh configured coverage: 692 tests pass; overall 95.75% lines / 95.27% functions; `dynamicRouter.ts` 99.42% lines / 87.50% functions on the final source. Typecheck and Bun build pass. ESLint exits zero with 33 pre-existing warnings and no errors. Branch coverage is unavailable in Bun's report. The CMS isolated gateway integration builds this actual source with fixture routes and verifies published persistence, query/projection/path boundaries and response serialization; it does not claim deployed API-key scope coverage.
+
+## SEC-003-FU-1 current internal authentication
+
+Internal actions now require Ed25519 requests bound to receiver, operation, exact
+body, actor, workspace and request id. Historical shared-token/hybrid instructions
+in this document no longer apply to authentication. Receivers fail closed without
+public trust; callers load only their own signing file. Shared static/HS256 tokens
+are rejected, including authz read checks. Follow the backend infra identity
+runbook for coordinated seven-service rollout and rotation. Protocol mirrors are
+generated from platform-contracts and must be changed/exported there; validate
+`corepack pnpm internal-request:check` with the backend workspace present.
 
 ## CMS-INT-A4 delivery access and registry rollback
 

@@ -17,8 +17,8 @@ export function getJwtStartupWarnings(
   const nodeEnv = ctx.nodeEnv ?? process.env.NODE_ENV ?? "development";
 
   const missing: string[] = [];
-  if (!jwtIssuer) missing.push("JWT_ISSUER");
-  if (!jwtAudience) missing.push("JWT_AUDIENCE");
+  if (!jwtIssuer?.trim()) missing.push("JWT_ISSUER");
+  if (!jwtAudience?.trim()) missing.push("JWT_AUDIENCE");
   if (missing.length === 0) return [];
 
   const base =
@@ -43,11 +43,6 @@ export function logJwtStartupWarnings(
   }
 }
 
-function envFlagEnabled(value: string | undefined): boolean {
-  if (!value) return false;
-  return value === "1" || value.toLowerCase() === "true";
-}
-
 export function assertJwtStartupConfig(
   auth: JwtStartupAuthConfig | null | undefined,
   ctx: JwtStartupWarningContext = {},
@@ -55,15 +50,12 @@ export function assertJwtStartupConfig(
   const nodeEnv = ctx.nodeEnv ?? process.env.NODE_ENV ?? "development";
   if (nodeEnv !== "production") return;
 
-  const requireInProd = envFlagEnabled(auth?.jwtRequireIssAudInProd ?? process.env.JWT_REQUIRE_ISS_AUD_IN_PROD);
-  if (!requireInProd) return;
-
   const jwtIssuer = auth?.jwtIssuer;
   const jwtAudience = auth?.jwtAudience;
-  if (jwtIssuer && jwtAudience) return;
+  if (jwtIssuer?.trim() && jwtAudience?.trim()) return;
 
   throw new Error(
     `[SEC-GW-JWT-1] Refusing to start in NODE_ENV=production without both JWT_ISSUER and JWT_AUDIENCE ` +
-      `(set JWT_REQUIRE_ISS_AUD_IN_PROD=0 to override).`,
+      `(JWT_REQUIRE_ISS_AUD_IN_PROD no longer disables this requirement).`,
   );
 }

@@ -159,7 +159,7 @@ describe("Rate Limiting Integration", () => {
   describe("Rate limited routes", () => {
     it("should allow requests under the rate limit", async () => {
       const token = signHs256ForTest(
-        { sub: "user-1", exp: 2_000_000_000 },
+        { sub: "user-1", exp: Math.floor(Date.now() / 1000) + 300 },
         "test-jwt-secret"
       );
 
@@ -197,7 +197,7 @@ describe("Rate Limiting Integration", () => {
 
     it("should return 429 when rate limit exceeded", async () => {
       const token = signHs256ForTest(
-        { sub: "user-1", exp: 2_000_000_000 },
+        { sub: "user-1", exp: Math.floor(Date.now() / 1000) + 300 },
         "test-jwt-secret"
       );
 
