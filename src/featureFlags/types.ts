@@ -71,6 +71,8 @@ export const DEFAULT_FLAGS: Record<string, boolean> = {
   // sweep) is green; flip ON per-workspace via PostHog admin.
   // Owner plan: xynes-infra/docs/plans/2026-05-14-storage-live-provider-rollout.md §8.
   cms_editor_storage_uploads: false,
+  // CMS-INT: folder/entry integration controls, rolled out per workspace.
+  cms_content_integrations: false,
 
   // Security/Operational
   xynes_maintenance_mode: false,

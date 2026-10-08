@@ -44,6 +44,44 @@ mock.module("posthog-node", () => ({
 const { FeatureFlagService } = await import("./service");
 
 describe("FeatureFlagService", () => {
+  it("defaults content integrations off when PostHog is unavailable or the flag is missing", async () => {
+    expect(DEFAULT_FLAGS.cms_content_integrations).toBe(false);
+    expect(PUBLIC_FLAG_KEYS).not.toContain("cms_content_integrations");
+    const disabled = new FeatureFlagService({ apiKey: "" });
+    expect(
+      (await disabled.getAllFlags({ userId: "user-123" })).flags
+        .cms_content_integrations,
+    ).toBe(false);
+    const enabled = new FeatureFlagService({ apiKey: "test-api-key" });
+    expect(
+      (await enabled.getAllFlags({ userId: "user-123" })).flags
+        .cms_content_integrations,
+    ).toBe(false);
+  });
+  it.each([true, false, "variant"])(
+    "evaluates workspace content integrations with boolean-only result %s",
+    async (value) => {
+      mockGetAllFlags.mockImplementation(async () => ({
+        cms_content_integrations: value,
+      }));
+      const service = new FeatureFlagService({ apiKey: "test-api-key" });
+      expect(
+        (
+          await service.getAllFlags({
+            userId: "user-123",
+            workspaceId: "workspace-a",
+          })
+        ).flags.cms_content_integrations,
+      ).toBe(value === true);
+      expect(mockGetAllFlags).toHaveBeenCalledWith(
+        "user-123",
+        expect.objectContaining({
+          groups: { workspace: "workspace-a" },
+          groupProperties: { workspace: { id: "workspace-a" } },
+        }),
+      );
+    },
+  );
   const testContext: FeatureFlagContext = {
     userId: "user-123",
     workspaceId: "ws-456",

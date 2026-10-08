@@ -42,6 +42,44 @@ function createHeaderInspectingAuthVerifier(
 }
 
 describe("flags.route", () => {
+  it("returns the integration flag only to authenticated callers with workspace evaluation context", async () => {
+    const getAllFlags = vi.fn(async () => ({
+      flags: { cms_content_integrations: true },
+    }));
+    const service: IFeatureFlagService = {
+      ...mockFeatureFlagService,
+      getAllFlags,
+    };
+    const authenticated = createFlagsRoute(service, {
+      authVerifier: createMockAuthVerifier({ userId: "user-123" }),
+    });
+    const response = await authenticated.request("http://localhost/", {
+      headers: { "X-XS-Workspace-Id": "workspace-a" },
+    });
+    expect(await response.json()).toEqual({
+      flags: { cms_content_integrations: true },
+      authenticated: true,
+    });
+    expect(getAllFlags).toHaveBeenCalledWith({
+      userId: "user-123",
+      workspaceId: "workspace-a",
+    });
+    const anonymous = createFlagsRoute(service, {
+      authVerifier: createMockAuthVerifier(null),
+    });
+    const publicResponse = await anonymous.request("http://localhost/");
+    expect(await publicResponse.json()).toEqual({
+      flags: {},
+      authenticated: false,
+    });
+    expect(
+      (
+        await anonymous.request(
+          "http://localhost/cms_content_integrations",
+        )
+      ).status,
+    ).toBe(401);
+  });
   beforeEach(() => {
     vi.clearAllMocks();
   });
