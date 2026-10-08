@@ -1831,3 +1831,12 @@ authorization and no upstream fallback; the shared default Postgres SQL fixture
 asserts enabled filtering. CMS's disposable `content-delivery-access.test.ts`
 proves real issued keys, HTTP dispatch, SQL migration idempotence and rollback.
 Operational details are in infra `docs/deployment/cms-delivery-access.md`.
+
+## CMS content integration rollout
+
+PostHog key: `cms_content_integrations` (boolean, default OFF). It is in
+`DEFAULT_FLAGS` and excluded from `PUBLIC_FLAG_KEYS`. Authenticated `/flags` calls
+reuse the active workspace context and PostHog `workspace` group evaluation.
+Missing flags, missing PostHog configuration, or evaluation errors return false.
+The CMS consumes the auth SDK contract; ship both additions with its consumer.
+This UI rollout flag does not grant content delivery or API-key permissions.
