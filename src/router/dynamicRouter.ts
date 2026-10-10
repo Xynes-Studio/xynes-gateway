@@ -26,6 +26,7 @@ import { extractClientIp } from "../rateLimit/keyBuilder";
 import type { BodyLimiter } from "../bodyLimit/bodyLimiter";
 import { safeJsonParse, JsonParseError } from "../bodyLimit/jsonParser";
 import { DEFAULT_MAX_BODY_BYTES } from "../bodyLimit/types";
+import { cmsPublicationPermissions, CmsPublicationIntentError, parseCmsAuthorizedActions } from "../security/cms-publication-policy";
 import type { GatewayRouteMeta } from "../logging/types";
 
 export interface DynamicRouterOptions {
@@ -867,7 +868,8 @@ export class DynamicRouter {
       if (DynamicRouter.UNSAFE_PAYLOAD_KEYS.has(key)) continue;
       if (key === "workspaceId") continue;
       safeQuery[key] =
-        cmsDelivery && key !== "limit" && key !== "offset"
+        (cmsDelivery && key !== "limit" && key !== "offset") ||
+        (actionKey.startsWith("cms.") && (key === "publishNow" || key === "unpublish"))
           ? value
           : DynamicRouter.coerceQueryValue(value);
     }
@@ -881,9 +883,45 @@ export class DynamicRouter {
     }
     DynamicRouter.copySafe(payload, safeParams);
 
+    // Telemetry's query schemas require workspaceId in the payload as well
+    // as the signed context. Supply the authenticated path value; query/body
+    // identity overrides cannot choose the repository workspace.
+    const telemetryQuery =
+      ["telemetry-service", "telemetry_service", "telemetryservice"].includes(serviceKeyNormalized) &&
+      ["telemetry.events.listRecentForWorkspace", "telemetry.stats.summaryByRoute"].includes(actionKey);
+    if (telemetryQuery) {
+      if (!route.workspaceScoped || !params.workspaceId) {
+        return Response.json(createErrorResponse("VALIDATION_ERROR", "Missing telemetry workspace context", reqId), { status: 400 });
+      }
+      payload.workspaceId = params.workspaceId;
+    }
+
+    // Authorize the effects of the exact payload we will sign, after query/path
+    // precedence is resolved. Client-supplied approvals are never copied here.
+    let publicationPermissions: string[];
+    try {
+      publicationPermissions = cmsPublicationPermissions(actionKey, payload);
+    } catch (error) {
+      if (!(error instanceof CmsPublicationIntentError)) throw error;
+      return Response.json(createErrorResponse("VALIDATION_ERROR", error.message, reqId), {status: 400});
+    }
+    const requiredPublicationActions = publicationPermissions.length > 0
+      ? [actionKey, ...publicationPermissions] : [];
+    for (const permission of requiredPublicationActions) {
+      const allowed = isApiKey
+        ? actor.scopes.includes(permission)
+        : !!userId && await this.authzService.check(userId,
+          route.workspaceScoped ? params.workspaceId ?? null : null, permission);
+      if (!allowed) {
+        return Response.json(createErrorResponse("FORBIDDEN", "Missing permission for CMS publication effect", reqId), {status: 403});
+      }
+    }
+
     const actionPayload = {
       actionKey,
       payload,
+      ...(publicationPermissions.length > 0
+        ? {authorizedActions: parseCmsAuthorizedActions(requiredPublicationActions)} : {}),
     };
 
     const serializedBody = JSON.stringify(actionPayload);
