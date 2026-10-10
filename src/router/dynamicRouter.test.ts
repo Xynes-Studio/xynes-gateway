@@ -468,15 +468,18 @@ describe("DynamicRouter", () => {
       });
     });
 
-    it("should proxy telemetry-service route to telemetry-actions endpoint", async () => {
+    it.each([
+      ["events", "telemetry.events.listRecentForWorkspace"],
+      ["stats/routes", "telemetry.stats.summaryByRoute"],
+    ])("forwards trusted workspace context to telemetry %s queries", async (suffix, actionKey) => {
       const telemetryRoute: Route = {
         id: "telemetry-1",
-        pathPattern: "/workspaces/:workspaceId/telemetry/events",
+        pathPattern: `/workspaces/:workspaceId/telemetry/${suffix}`,
         method: "GET",
         serviceKey: "telemetry-service",
         targetPath: "/workspaces/:workspaceId/telemetry/events",
         workspaceScoped: true,
-        actionKey: "telemetry.events.listRecentForWorkspace",
+        actionKey,
       };
       const match = {
         route: telemetryRoute,
@@ -499,13 +502,14 @@ describe("DynamicRouter", () => {
             if (body.actionKey === "telemetry.events.ingest") {
               return new Response('{"id":"evt-1"}', { status: 201 });
             }
+            expect(body.payload).toEqual({ workspaceId: "ws-1", limit: 50 });
             return new Response('{"events":[]}', { status: 200 });
           }
           return new Response("not found", { status: 404 });
         },
       );
 
-      const response = await router.proxyRequest(match, req, { limit: "50" });
+      const response = await router.proxyRequest(match, req, { limit: "50", workspaceId: "foreign-workspace" });
       expect(response.status).toBe(200);
       expect(global.fetch).toHaveBeenCalledWith(
         "http://localhost:3004/internal/telemetry-actions",

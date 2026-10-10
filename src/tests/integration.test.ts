@@ -829,7 +829,7 @@ describe("Gateway Integration", () => {
         }
 
         expect(body.actionKey).toBe("telemetry.events.listRecentForWorkspace");
-        expect(body.payload).toEqual({ limit: 20 });
+        expect(body.payload).toEqual({ limit: 20, workspaceId: "workspace-1" });
         return Promise.resolve(
           new Response(JSON.stringify({ events: [] }), { status: 200 }),
         );
@@ -962,7 +962,7 @@ describe("Gateway Integration", () => {
         }
 
         expect(body.actionKey).toBe("telemetry.stats.summaryByRoute");
-        expect(body.payload).toEqual({});
+        expect(body.payload).toEqual({ workspaceId: "workspace-1" });
         return Promise.resolve(
           new Response(JSON.stringify({ routes: [] }), { status: 200 }),
         );
